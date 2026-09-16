@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Market Scanner — ChartPro</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/scanner.css">
+</head>
+<body>
+
+<header id="top-toolbar">
+  <div class="toolbar-group brand">
+    <i class="fa-solid fa-chart-line brand-icon"></i>
+    <span class="brand-name">ChartPro</span>
+  </div>
+
+  <a href="index.html" class="icon-btn nav-link" title="Back to Chart">
+    <i class="fa-solid fa-chart-column"></i><span class="btn-text">Chart</span>
+  </a>
+  <span class="icon-btn active" style="cursor:default">
+    <i class="fa-solid fa-magnifying-glass-chart"></i><span class="btn-text">Scanner</span>
+  </span>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="toolbar-group" id="quote-filter">
+    <button class="tf-btn active" data-quote="USDT">USDT</button>
+    <button class="tf-btn" data-quote="FDUSD">FDUSD</button>
+    <button class="tf-btn" data-quote="BTC">BTC</button>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="toolbar-group" id="preset-filter">
+    <button class="tf-btn preset active" data-preset="all">All</button>
+    <button class="tf-btn preset" data-preset="gainers">Top Gainers</button>
+    <button class="tf-btn preset" data-preset="losers">Top Losers</button>
+    <button class="tf-btn preset" data-preset="volume">Most Volume</button>
+    <button class="tf-btn preset" data-preset="volatile">Most Volatile</button>
+    <button class="tf-btn preset" data-preset="oversold">RSI Oversold</button>
+    <button class="tf-btn preset" data-preset="overbought">RSI Overbought</button>
+    <button class="tf-btn preset" data-preset="volspike">Volume Spike</button>
+  </div>
+
+  <div class="toolbar-spacer"></div>
+
+  <div class="scan-search">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <input id="scan-search-input" type="text" placeholder="Filter symbol…" autocomplete="off">
+  </div>
+</header>
+
+<div id="scanner-body">
+  <div id="scan-summary">
+    <div class="sum-card"><label>Pairs</label><span id="sum-pairs">—</span></div>
+    <div class="sum-card"><label>Advancers</label><span id="sum-adv" class="up">—</span></div>
+    <div class="sum-card"><label>Decliners</label><span id="sum-dec" class="down">—</span></div>
+    <div class="sum-card"><label>Avg 24h Change</label><span id="sum-avg">—</span></div>
+    <div class="sum-card"><label>Total Quote Vol</label><span id="sum-vol">—</span></div>
+    <div class="sum-note" id="scan-status">Loading…</div>
+  </div>
+
+  <div id="scan-table-wrap">
+    <table id="scan-table">
+      <thead>
+        <tr>
+          <th data-sort="symbol" class="sortable">Symbol</th>
+          <th data-sort="price" class="sortable num">Price</th>
+          <th data-sort="chg" class="sortable num sorted-desc">24h %</th>
+          <th data-sort="chgAbs" class="sortable num hide-sm">24h Δ</th>
+          <th data-sort="high" class="num hide-sm">24h High</th>
+          <th data-sort="low" class="num hide-sm">24h Low</th>
+          <th data-sort="range" class="sortable num hide-sm">Volatility</th>
+          <th data-sort="vol" class="sortable num hide-xs">Volume</th>
+          <th data-sort="trades" class="sortable num hide-sm">Trades</th>
+          <th data-sort="rsi5" class="sortable num hide-sm">RSI 5m</th>
+          <th data-sort="rsi15" class="sortable num hide-sm">RSI 15m</th>
+          <th data-sort="rsi" class="sortable num">RSI 1h</th>
+          <th data-sort="vspike" class="sortable num hide-xs">Vol ×</th>
+          <th class="num">Signal</th>
+        </tr>
+      </thead>
+      <tbody id="scan-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<footer id="status-bar">
+  <span id="conn-status" class="live"><i class="fa-solid fa-circle"></i> <span id="conn-text">Auto-refresh 10s</span></span>
+  <span class="status-note">Data: Binance · Click a row to open the chart</span>
+</footer>
+
+<script src="js/scanner.js"></script>
+</body>
+</html>

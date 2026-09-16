@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChartPro — Crypto Charting</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header id="top-toolbar">
+  <div class="toolbar-group brand">
+    <i class="fa-solid fa-chart-line brand-icon"></i>
+    <span class="brand-name">ChartPro</span>
+  </div>
+
+  <button id="symbol-button" class="symbol-btn" title="Change symbol">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span id="symbol-label">BTCUSDT</span>
+  </button>
+
+  <div class="toolbar-group" id="interval-group">
+    <button class="tf-btn" data-tf="1m">1m</button>
+    <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn" data-tf="15m">15m</button>
+    <button class="tf-btn" data-tf="1h" >1H</button>
+    <button class="tf-btn active" data-tf="4h">4H</button>
+    <button class="tf-btn" data-tf="1d">1D</button>
+    <button class="tf-btn" data-tf="1w">1W</button>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="toolbar-group" id="charttype-group">
+    <button class="icon-btn ct-btn active" data-ct="candles" title="Candles"><i class="fa-solid fa-chart-column"></i></button>
+    <button class="icon-btn ct-btn" data-ct="bars" title="Bars"><i class="fa-solid fa-bars-staggered"></i></button>
+    <button class="icon-btn ct-btn" data-ct="line" title="Line"><i class="fa-solid fa-chart-line"></i></button>
+    <button class="icon-btn ct-btn" data-ct="area" title="Area"><i class="fa-solid fa-chart-area"></i></button>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="dropdown" id="indicators-dropdown">
+    <button class="icon-btn" id="indicators-button" title="Indicators">
+      <i class="fa-solid fa-flask"></i><span class="btn-text">Indicators</span>
+    </button>
+    <div class="dropdown-menu" id="indicators-menu">
+      <div class="dd-title">Moving Averages</div>
+      <label class="dd-item"><input type="checkbox" data-ind="sma20"> SMA 20</label>
+      <label class="dd-item"><input type="checkbox" data-ind="sma50"> SMA 50</label>
+      <label class="dd-item"><input type="checkbox" data-ind="sma200"> SMA 200</label>
+      <label class="dd-item"><input type="checkbox" data-ind="ema20"> EMA 20</label>
+      <label class="dd-item"><input type="checkbox" data-ind="ema50"> EMA 50</label>
+      <label class="dd-item"><input type="checkbox" data-ind="ema200"> EMA 200</label>
+      <label class="dd-item"><input type="checkbox" data-ind="wma20"> WMA 20</label>
+      <div class="dd-title">Overlays</div>
+      <label class="dd-item"><input type="checkbox" data-ind="bb"> Bollinger Bands (20, 2)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="keltner"> Keltner Channels (20, 2)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="donchian"> Donchian Channels (20)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="vwap"> VWAP</label>
+      <label class="dd-item"><input type="checkbox" data-ind="ichimoku"> Ichimoku Cloud (9, 26, 52)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="psar"> Parabolic SAR</label>
+      <label class="dd-item"><input type="checkbox" data-ind="supertrend"> SuperTrend (10, 3)</label>
+      <div class="dd-title">Oscillators</div>
+      <label class="dd-item"><input type="checkbox" data-ind="rsi"> RSI (14)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="macd"> MACD (12, 26, 9)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="stoch"> Stochastic (14, 3, 3)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="stochrsi"> Stochastic RSI (14, 14, 3, 3)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="atr"> ATR (14)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="adx"> ADX / DMI (14)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="cci"> CCI (20)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="mfi"> MFI (14)</label>
+      <label class="dd-item"><input type="checkbox" data-ind="obv"> OBV</label>
+      <label class="dd-item"><input type="checkbox" data-ind="willr"> Williams %R (14)</label>
+    </div>
+  </div>
+
+  <div class="dropdown" id="smc-dropdown">
+    <button class="icon-btn" id="smc-button" title="Smart Money Concepts auto-annotations">
+      <i class="fa-solid fa-brain"></i><span class="btn-text">SMC</span>
+    </button>
+    <div class="dropdown-menu" id="smc-menu">
+      <div class="dd-title">Smart Money Concepts — auto-drawn</div>
+      <label class="dd-item"><input type="checkbox" data-smc="structure"> Market Structure (BOS / CHoCH)</label>
+      <label class="dd-item"><input type="checkbox" data-smc="ob"> Order Blocks</label>
+      <label class="dd-item"><input type="checkbox" data-smc="fvg"> Fair Value Gaps (FVG)</label>
+      <label class="dd-item"><input type="checkbox" data-smc="liquidity"> Liquidity (EQH / EQL)</label>
+      <label class="dd-item"><input type="checkbox" data-smc="swings"> Swing Points (HH / HL / LH / LL)</label>
+      <label class="dd-item"><input type="checkbox" data-smc="pd"> Premium / Discount Zones</label>
+      <div class="dd-sep"></div>
+      <button class="dd-action" id="smc-all-on">Enable all</button>
+      <button class="dd-action" id="smc-all-off">Disable all</button>
+    </div>
+  </div>
+
+  <div class="dropdown" id="intraday-dropdown">
+    <button class="icon-btn" id="intraday-button" title="Intraday tools">
+      <i class="fa-solid fa-bolt"></i><span class="btn-text">Intraday</span>
+    </button>
+    <div class="dropdown-menu" id="intraday-menu">
+      <div class="dd-title">Intraday Tools</div>
+      <label class="dd-item"><input type="checkbox" data-intra="sessions"> Session Boxes (Asia / London / NY)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="pdlevels"> PDH / PDL (Previous Day)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="pwlevels"> PWH / PWL (Previous Week)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="vprofile"> Volume Profile (POC / VAH / VAL)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="cvd"> CVD — Cumulative Volume Delta</label>
+      <label class="dd-item"><input type="checkbox" data-intra="countdown" checked> Candle Countdown</label>
+      <div class="dd-sep"></div>
+      <button class="dd-action" id="open-calc"><i class="fa-solid fa-calculator"></i> Position Size Calculator</button>
+    </div>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <a href="scanner.html" class="icon-btn nav-link" title="Market Scanner">
+    <i class="fa-solid fa-magnifying-glass-chart"></i><span class="btn-text">Scanner</span>
+  </a>
+  <a href="journal.html" class="icon-btn nav-link" title="Trade Journal">
+    <i class="fa-solid fa-book"></i><span class="btn-text">Journal</span>
+  </a>
+
+  <div class="toolbar-spacer"></div>
+
+  <div id="ticker-stats">
+    <span id="stat-price" class="stat-price">—</span>
+    <span id="stat-change" class="stat-change">—</span>
+    <span class="stat-pair"><label>24h High</label><span id="stat-high">—</span></span>
+    <span class="stat-pair"><label>24h Low</label><span id="stat-low">—</span></span>
+    <span class="stat-pair"><label>24h Vol</label><span id="stat-vol">—</span></span>
+  </div>
+
+  <button id="sidebar-toggle" class="icon-btn" title="Toggle panels (watchlist, book, tape, alerts)">
+    <i class="fa-solid fa-table-columns"></i>
+  </button>
+</header>
+
+<div id="workspace">
+
+  <aside id="left-toolbar">
+    <button class="tool-btn active" data-tool="cursor" title="Cursor / Select (V)"><i class="fa-solid fa-arrow-pointer"></i></button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" data-tool="trendline" title="Trend Line (T)"><i class="fa-solid fa-slash"></i></button>
+    <button class="tool-btn" data-tool="ray" title="Ray (extended right)"><i class="fa-solid fa-angle-right"></i></button>
+    <button class="tool-btn" data-tool="hline" title="Horizontal Line (H)"><i class="fa-solid fa-grip-lines"></i></button>
+    <button class="tool-btn" data-tool="vline" title="Vertical Line"><i class="fa-solid fa-grip-lines-vertical"></i></button>
+    <button class="tool-btn" data-tool="rect" title="Rectangle (R)"><i class="fa-regular fa-square"></i></button>
+    <button class="tool-btn" data-tool="fib" title="Fibonacci Retracement (F)"><i class="fa-solid fa-bars"></i></button>
+    <button class="tool-btn" data-tool="brush" title="Brush (free draw)"><i class="fa-solid fa-paintbrush"></i></button>
+    <button class="tool-btn" data-tool="text" title="Text Note"><i class="fa-solid fa-font"></i></button>
+    <button class="tool-btn" data-tool="ruler" title="Measure (M)"><i class="fa-solid fa-ruler"></i></button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn long" data-tool="long" title="Long Position (target/stop, R/R)"><i class="fa-solid fa-arrow-trend-up"></i></button>
+    <button class="tool-btn short" data-tool="short" title="Short Position (target/stop, R/R)"><i class="fa-solid fa-arrow-trend-down"></i></button>
+    <button class="tool-btn alert-tool" data-tool="alert" title="Price Alert (click a price level)"><i class="fa-solid fa-bell"></i></button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" id="toggle-magnet" title="Magnet: snap to OHLC"><i class="fa-solid fa-magnet"></i></button>
+    <button class="tool-btn danger" id="clear-drawings" title="Remove all drawings"><i class="fa-solid fa-trash"></i></button>
+  </aside>
+
+  <main id="chart-area">
+    <div id="draw-settings" class="hidden">
+      <span class="ds-label" id="ds-title">Line</span>
+      <div class="ds-colors" id="ds-colors"></div>
+      <select id="ds-width" title="Line width">
+        <option value="1">1px</option>
+        <option value="1.5" selected>1.5px</option>
+        <option value="2">2px</option>
+        <option value="3">3px</option>
+        <option value="4">4px</option>
+      </select>
+      <select id="ds-style" title="Line style">
+        <option value="solid" selected>Solid</option>
+        <option value="dashed">Dashed</option>
+        <option value="dotted">Dotted</option>
+      </select>
+      <button id="ds-delete" class="ds-btn danger" title="Delete drawing"><i class="fa-solid fa-trash"></i></button>
+      <button id="ds-close" class="ds-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <section id="main-chart-wrap">
+      <div id="legend"></div>
+      <div id="main-chart"></div>
+      <canvas id="draw-overlay"></canvas>
+
+      <!-- Candle Story: click a candle for buyer/seller context -->
+      <aside id="candle-story" class="hidden" aria-label="Candle story">
+        <div class="cs-head">
+          <span class="cs-title"><i class="fa-solid fa-book-open-reader"></i> Candle Story</span>
+          <span id="cs-live-badge" class="hidden">LIVE</span>
+          <button id="cs-close" class="cs-close" title="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="cs-when-row"><span id="cs-when">—</span><b id="cs-chg">—</b></div>
+        <div id="cs-verdict" class="cs-verdict">—</div>
+        <div class="cs-bar-labels">
+          <span id="cs-buy-label" class="up">Buyers —</span>
+          <span id="cs-sell-label" class="down">— Sellers</span>
+        </div>
+        <div class="cs-bar"><div id="cs-buy-fill" class="buy"></div><div class="sell"></div></div>
+        <div class="cs-grid">
+          <span>Open</span><b id="cs-o">—</b>
+          <span>High</span><b id="cs-h">—</b>
+          <span>Low</span><b id="cs-l">—</b>
+          <span>Close</span><b id="cs-c">—</b>
+          <span>Body</span><b id="cs-body">—</b>
+          <span>Volume</span><b id="cs-vol">—</b>
+          <span>Buy vol</span><b id="cs-bv" class="up">—</b>
+          <span>Sell vol</span><b id="cs-sv" class="down">—</b>
+        </div>
+        <ul id="cs-notes"></ul>
+      </aside>
+    </section>
+    <div id="sub-panes"></div>
+  </main>
+
+  <aside id="right-sidebar">
+    <div id="sidebar-tabs">
+      <button class="sb-tab active" data-tab="watchlist" title="Watchlist"><i class="fa-solid fa-star"></i></button>
+      <button class="sb-tab" data-tab="book" title="Order Book"><i class="fa-solid fa-book-open"></i></button>
+      <button class="sb-tab" data-tab="tape" title="Time & Sales"><i class="fa-solid fa-receipt"></i></button>
+      <button class="sb-tab" data-tab="alerts" title="Alerts"><i class="fa-solid fa-bell"></i></button>
+    </div>
+    <div id="watchlist" class="sb-panel"></div>
+    <div id="orderbook" class="sb-panel hidden">
+      <div class="ob-header"><span>Price</span><span>Size</span><span>Total</span></div>
+      <div id="ob-asks"></div>
+      <div id="ob-mid">—</div>
+      <div id="ob-bids"></div>
+    </div>
+    <div id="tape" class="sb-panel hidden">
+      <div class="ob-header"><span>Time</span><span>Price</span><span>Size</span></div>
+      <div id="tape-rows"></div>
+    </div>
+    <div id="alerts-panel" class="sb-panel hidden">
+      <div class="alerts-info">Use the <i class="fa-solid fa-bell"></i> tool and click a price on the chart to set an alert.</div>
+      <div id="alerts-list"></div>
+    </div>
+  </aside>
+</div>
+
+<footer id="status-bar">
+  <span id="conn-status"><i class="fa-solid fa-circle"></i> Connecting…</span>
+  <span id="candle-countdown" title="Time until candle close"><i class="fa-regular fa-clock"></i> —</span>
+  <span id="tz-label"></span>
+  <span class="status-note">Data: Binance · Charts: TradingView Lightweight Charts™</span>
+</footer>
+
+<!-- Position size calculator modal -->
+<div id="calc-modal" class="modal hidden">
+  <div class="modal-box calc-box">
+    <div class="modal-head">
+      <i class="fa-solid fa-calculator"></i>
+      <span class="modal-title">Position Size Calculator</span>
+      <button id="calc-close" class="icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="calc-body">
+      <label class="calc-row"><span>Account size (USDT)</span><input type="number" id="calc-account" value="10000" min="0"></label>
+      <label class="calc-row"><span>Risk per trade (%)</span><input type="number" id="calc-risk" value="1" min="0.1" step="0.1"></label>
+      <label class="calc-row"><span>Entry price</span><input type="number" id="calc-entry" step="any"></label>
+      <label class="calc-row"><span>Stop-loss price</span><input type="number" id="calc-stop" step="any"></label>
+      <label class="calc-row"><span>Leverage</span><input type="number" id="calc-lev" value="1" min="1" max="125"></label>
+      <div class="calc-results">
+        <div class="calc-res"><label>Risk amount</label><span id="calc-riskamt">—</span></div>
+        <div class="calc-res"><label>Position size</label><span id="calc-qty">—</span></div>
+        <div class="calc-res"><label>Position value</label><span id="calc-value">—</span></div>
+        <div class="calc-res"><label>Margin required</label><span id="calc-margin">—</span></div>
+      </div>
+      <div class="calc-note">Fill entry &amp; stop from the last price with the button below.</div>
+      <button id="calc-use-price" class="calc-btn">Use current price as entry</button>
+    </div>
+  </div>
+</div>
+
+<!-- Symbol search modal -->
+<div id="symbol-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input id="symbol-search-input" type="text" placeholder="Search crypto pair, e.g. ETH" autocomplete="off">
+      <button id="modal-close" class="icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div id="symbol-results"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="js/indicators.js"></script>
+<script src="js/smc.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>

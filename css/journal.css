@@ -1,0 +1,96 @@
+/* ============ Trade Journal page ============ */
+
+#journal-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#jr-stats {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+
+#jr-table-wrap { flex: 1 1 auto; overflow: auto; min-height: 0; }
+#jr-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+#jr-table thead th {
+  position: sticky; top: 0;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+#jr-table th.num, #jr-table td.num { text-align: right; }
+#jr-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(42,46,57,.45);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#jr-table td.notes { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+
+.side-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 10.5px;
+}
+.side-long { background: rgba(38,166,154,.18); color: var(--up); }
+.side-short { background: rgba(239,83,80,.18); color: var(--down); }
+
+.st-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 10.5px;
+}
+.st-open { background: rgba(41,98,255,.18); color: #5b8cff; }
+.st-win { background: rgba(38,166,154,.18); color: var(--up); }
+.st-loss { background: rgba(239,83,80,.18); color: var(--down); }
+.st-breakeven { background: rgba(120,123,134,.18); color: var(--text-dim); }
+
+.jr-del, .jr-closebtn {
+  background: transparent; border: none;
+  color: var(--text-dim); cursor: pointer;
+  padding: 4px 7px; border-radius: 4px;
+  font-size: 12px;
+}
+.jr-del:hover { background: rgba(239,83,80,.15); color: var(--down); }
+.jr-closebtn:hover { background: var(--panel-2); color: var(--accent); }
+
+#jr-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+#jr-empty.hidden { display: none; }
+
+.tr-select, .notes-row textarea {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.tr-select { width: 150px; }
+.notes-row { align-items: flex-start; }
+.notes-row textarea { width: 150px; resize: vertical; }
+
+@media (max-width: 800px) {
+  #jr-table td.notes { display: none; }
+}
