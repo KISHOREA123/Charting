@@ -1,3 +1,9 @@
+import * as LWC from 'lightweight-charts';
+import { Indicators } from './indicators.js';
+import { SMC } from './smc.js';
+import { INTERVALS, LatestTask, History, symbolValid, positive, candleValid, mergeCandles, drawingsValid, alertsValid, readStorage, writeStorage, escapeHtml, assetInfo, precisionFor, priceFormat, compact, download, csv } from './core.js';
+import { apiFetch, getMarkets, getCandles, MarketStream } from './market.js';
+import { initUI, toast, showDialog } from './ui.js';
 /* ============ ChartPro — main application ============
    Data: Binance public REST + WebSocket (no API key, CORS enabled)
    Charts: TradingView Lightweight Charts v4
@@ -6,6 +12,7 @@
 
 (() => {
   'use strict';
+  initUI('chart');
 
   // ---------- State ----------
   const state = {
@@ -25,43 +32,28 @@
     hoverPoint: null,
     selectedIdx: -1,
     magnet: false,
+    params: {}, colors: {}, smcOptions: { swingLen: 5, fvgMinPct: 0.05 }, vwapAnchor: 'session',
+    market: assetInfo('BTCUSDT'), loaded: false,
   };
 
-  const WATCHLIST = [
+  const DEFAULT_WATCHLIST = [
     ['BTCUSDT', 'Bitcoin'], ['ETHUSDT', 'Ethereum'], ['BNBUSDT', 'BNB'],
     ['SOLUSDT', 'Solana'], ['XRPUSDT', 'XRP'], ['ADAUSDT', 'Cardano'],
     ['DOGEUSDT', 'Dogecoin'], ['AVAXUSDT', 'Avalanche'], ['DOTUSDT', 'Polkadot'],
     ['LINKUSDT', 'Chainlink'], ['LTCUSDT', 'Litecoin'], ['TONUSDT', 'Toncoin'],
   ];
 
-  // Binance endpoints with fallbacks (data-api.binance.vision serves public
-  // market data without geo-restrictions).
-  const REST_HOSTS = ['https://data-api.binance.vision', 'https://api.binance.com'];
-  const WSS_HOSTS = ['wss://data-stream.binance.vision', 'wss://stream.binance.com:9443'];
-  let restIdx = 0, wssIdx = 0;
-  const REST = () => REST_HOSTS[restIdx];
-  const WSS = () => WSS_HOSTS[wssIdx];
-
-  async function apiFetch(path) {
-    for (let attempt = 0; attempt < REST_HOSTS.length; attempt++) {
-      try {
-        const res = await fetch(REST() + path);
-        if (res.ok) return res.json();
-        throw new Error('HTTP ' + res.status);
-      } catch (err) {
-        if (attempt === REST_HOSTS.length - 1) throw err;
-        restIdx = (restIdx + 1) % REST_HOSTS.length;
-      }
-    }
-  }
+  const WATCHLIST = readStorage('chartpro-watchlist', DEFAULT_WATCHLIST, v => Array.isArray(v) && v.length <= 40 && v.every(x => Array.isArray(x) && symbolValid(x[0]) && typeof x[1] === 'string'));
+  const selection = new LatestTask(), statsTask = new LatestTask(), levelsTask = new LatestTask();
+  let activeSelection, dataVersion = 0, lastMarketEvent = 0;
+  function invalidate() { dataVersion++; }
 
   // ---------- Chart setup ----------
-  const LWC = LightweightCharts;
   const chartOpts = {
-    layout: { background: { color: '#131722' }, textColor: '#d1d4dc', fontFamily: 'Inter, sans-serif' },
+    layout: { background: { color: '#131722' }, textColor: '#d1d4dc', fontFamily: 'Inter, system-ui, sans-serif', attributionLogo: true, panes: { separatorColor: '#303c50', separatorHoverColor: '#5b8cff', enableResize: true } },
     grid: { vertLines: { color: 'rgba(42,46,57,0.5)' }, horzLines: { color: 'rgba(42,46,57,0.5)' } },
     crosshair: { mode: LWC.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: '#2a2e39' },
+    rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 82 },
     timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false },
   };
 
@@ -69,7 +61,7 @@
   const chart = LWC.createChart(mainEl, chartOpts);
 
   let priceSeries = null;
-  const volumeSeries = chart.addHistogramSeries({
+  const volumeSeries = chart.addSeries(LWC.HistogramSeries, {
     priceScaleId: 'vol',
     priceFormat: { type: 'volume' },
     lastValueVisible: false, priceLineVisible: false,
@@ -82,21 +74,22 @@
     if (priceSeries) chart.removeSeries(priceSeries);
     const t = state.chartType;
     if (t === 'candles') {
-      priceSeries = chart.addCandlestickSeries({
+      priceSeries = chart.addSeries(LWC.CandlestickSeries, {
         upColor: '#26a69a', downColor: '#ef5350',
         wickUpColor: '#26a69a', wickDownColor: '#ef5350',
         borderVisible: false,
       });
     } else if (t === 'bars') {
-      priceSeries = chart.addBarSeries({ upColor: '#26a69a', downColor: '#ef5350' });
+      priceSeries = chart.addSeries(LWC.BarSeries, { upColor: '#26a69a', downColor: '#ef5350' });
     } else if (t === 'line') {
-      priceSeries = chart.addLineSeries({ color: '#2962ff', lineWidth: 2 });
+      priceSeries = chart.addSeries(LWC.LineSeries, { color: '#2962ff', lineWidth: 2 });
     } else {
-      priceSeries = chart.addAreaSeries({
+      priceSeries = chart.addSeries(LWC.AreaSeries, {
         lineColor: '#2962ff', lineWidth: 2,
         topColor: 'rgba(41,98,255,0.35)', bottomColor: 'rgba(41,98,255,0.02)',
       });
     }
+    priceSeries.applyOptions({ priceFormat: { type: 'price', precision: precisionFor(state.market.tickSize || 0.00000001), minMove: state.market.tickSize || 0.00000001 } });
     setPriceData();
   }
 
@@ -124,33 +117,46 @@
 
   // ---------- Data loading ----------
   async function loadCandles() {
-    setConn('connecting', 'Loading…');
-    hideCandleStory();
+    const task = activeSelection = selection.begin();
+    state.ws?.close(); state.ws = null;
+    const { symbol, interval } = state;
+    state.loaded = false; state.candles = []; invalidate(); setPriceData();
+    for (const series of Object.values(overlaySeries).flat()) series.setData([]);
+    for (const pane of Object.values(activePanes)) for (const series of Object.values(pane.seriesMap)) series.setData([]);
+    state.pendingPoints = []; state.hoverPoint = null; dragging = null; brushing = false;
+    state.drawTool = 'cursor'; selectTool('cursor'); lastTickPrice = null;
+    smcAnalysis = null; hideCandleStory(); redrawOverlay();
+    setConn('connecting', 'Loading market…');
+    const status = document.getElementById('chart-message');
+    status.hidden = false; status.textContent = 'Loading market history…';
     try {
-      const raw = await apiFetch(`/api/v3/klines?symbol=${state.symbol}&interval=${state.interval}&limit=1000`);
-      state.candles = raw.map(k => ({
-        time: k[0] / 1000,
-        open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5],
-        tb: +k[9], // taker-buy volume (for CVD)
-      }));
-      setPriceData();
-      refreshIndicators();
-      chart.timeScale().fitContent();
-      connectWs();
-      updateLegend();
-      updateSmc(true);
-      redrawOverlay();
+      const markets = await getMarkets();
+      if (!task.current()) return;
+      const market = markets.find(m => m.symbol === symbol);
+      if (!market) throw new Error('This spot market is unavailable. Choose another symbol.');
+      const candles = await getCandles(symbol, interval, { signal: task.signal });
+      if (!task.current()) return;
+      if (!candles.length) throw new Error('No candles available for this market.');
+      state.market = market; state.candles = candles; state.loaded = true; invalidate();
+      priceSeries.applyOptions({ priceFormat: { type: 'price', precision: precisionFor(market.tickSize), minMove: market.tickSize } });
+      setPriceData(); refreshIndicators(); chart.timeScale().fitContent();
+      status.hidden = true; lastMarketEvent = Date.now();
+      updateLegend(); updateSmc(); redrawOverlay(); connectWs(task);
+      document.getElementById('market-caption').textContent = `${market.baseAsset} / ${market.quoteAsset} · Binance Spot`;
     } catch (err) {
-      console.error('kline load failed', err);
-      setConn('offline', 'Data error');
+      if (!task.current()) return;
+      setConn('offline', 'Market unavailable');
+      status.textContent = err.message + ' Use Retry or choose another market.';
     }
   }
 
   async function load24hStats() {
+    const task = statsTask.begin(), symbol = state.symbol;
     try {
-      const d = await apiFetch(`/api/v3/ticker/24hr?symbol=${state.symbol}`);
+      const d = await apiFetch(`/api/v3/ticker/24hr?symbol=${symbol}`, { signal: task.signal });
+      if (!task.current() || symbol !== state.symbol) return;
       renderStats(+d.lastPrice, +d.priceChangePercent, +d.highPrice, +d.lowPrice, +d.quoteVolume);
-    } catch (e) { /* non-fatal */ }
+    } catch { /* candle feed has its own freshness indicator */ }
   }
 
   function renderStats(price, chgPct, high, low, qVol) {
@@ -165,50 +171,59 @@
   }
 
   // ---------- WebSocket: live kline ----------
-  function connectWs() {
-    if (state.ws) { state.ws.onclose = null; state.ws.close(); }
-    const stream = `${state.symbol.toLowerCase()}@kline_${state.interval}`;
-    const ws = new WebSocket(`${WSS()}/ws/${stream}`);
-    state.ws = ws;
-    let opened = false;
-    ws.addEventListener('open', () => { opened = true; setConn('live', 'Live'); });
-    ws.onmessage = (ev) => {
-      const m = JSON.parse(ev.data);
-      if (!m.k) return;
-      const k = m.k;
-      const c = { time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v, tb: +k.V };
-      checkAlerts(+k.c);
-      const last = state.candles[state.candles.length - 1];
-      if (last && c.time === last.time) state.candles[state.candles.length - 1] = c;
-      else if (!last || c.time > last.time) state.candles.push(c);
-      updateLastBar(c);
-      refreshIndicators();
-      scheduleSmc();
-      document.getElementById('stat-price').textContent = fmtPrice(c.close);
-      updateLegend();
-      if (csTime === c.time) renderCandleStory(); // live candle story refresh
+  function connectWs(task = activeSelection) {
+    state.ws?.close();
+    const { symbol, interval } = state;
+    let syncing = false, buffered = [], seen = false;
+    const accept = c => {
+      const last = state.candles.at(-1);
+      if (!task.current() || !candleValid(c) || (last && c.time < last.time)) return;
+      state.candles = mergeCandles(state.candles, [c]); invalidate();
+      if (state.candles.length === 3000 && last?.time !== c.time) setPriceData(); else updateLastBar(c);
+      lastMarketEvent = Date.now(); lastTickPrice ??= last?.close ?? c.close; checkAlerts(c.close);
+      scheduleIndicators(); scheduleSmc(); schedulePaint();
+      document.getElementById('stat-price').textContent = fmtPrice(c.close); updateLegend();
+      if (csTime === c.time) renderCandleStory();
     };
-    ws.onclose = () => {
-      if (!opened) wssIdx = (wssIdx + 1) % WSS_HOSTS.length;
-      setConn('offline', 'Reconnecting…');
-      setTimeout(() => { if (state.ws === ws) connectWs(); }, opened ? 3000 : 500);
+    const reconcile = async () => {
+      if (syncing || !task.current()) return;
+      syncing = true; setConn('connecting', 'Reconciling candles…');
+      try {
+        const last = state.candles.at(-1), step = INTERVALS[interval];
+        const largeGap = !last || Date.now() / 1000 - last.time >= 999 * step;
+        const fresh = await getCandles(symbol, interval, { signal: task.signal, ...(largeGap ? {} : { startTime: last.time - step }) });
+        if (!task.current()) return;
+        state.candles = mergeCandles(largeGap ? [] : state.candles, fresh);
+        const tail = state.candles.at(-1)?.time || 0;
+        state.candles = mergeCandles(state.candles, buffered.filter(c => c.time >= tail));
+        buffered = []; invalidate(); setPriceData(); refreshIndicators(); updateSmc(); schedulePaint();
+        lastMarketEvent = Date.now(); setConn('live', 'Live · reconciled');
+      } catch (e) {
+        if (task.current()) { setConn('stale', 'Reconciliation failed · reconnecting'); state.ws?.socket?.close(); }
+      } finally { syncing = false; }
     };
-    ws.onerror = () => ws.close();
+    state.ws = new MarketStream(`/ws/${symbol.toLowerCase()}@kline_${interval}`, {
+      onOpen: () => { seen = true; reconcile(); },
+      onData: m => {
+        if (!task.current() || !m.k || m.k.s !== symbol || m.k.i !== interval) return;
+        const k = m.k;
+        const c = { time: +k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v, tb: +k.V, closed: !!k.x };
+        if (!candleValid(c)) return;
+        if (syncing) { buffered.push(c); buffered = buffered.slice(-200); return; }
+        if (c.time > (state.candles.at(-1)?.time || c.time) + INTERVALS[interval]) { buffered.push(c); reconcile(); return; }
+        accept(c);
+      },
+      onStatus: status => { if (task.current() && !syncing) setConn(status, status === 'live' ? 'Live market data' : status === 'connecting' && seen ? 'Reconnecting…' : status === 'stale' ? 'Stale feed · reconnecting' : status === 'offline' ? 'Offline · retrying' : 'Connecting stream…'); },
+    });
   }
 
-  // ---------- WebSocket: watchlist mini tickers ----------
   function connectWatchlistWs() {
-    const streams = WATCHLIST.map(([s]) => `${s.toLowerCase()}@miniTicker`).join('/');
-    const ws = new WebSocket(`${WSS()}/stream?streams=${streams}`);
-    state.wlWs = ws;
-    let opened = false;
-    ws.addEventListener('open', () => { opened = true; });
-    ws.onmessage = (ev) => {
-      const { data } = JSON.parse(ev.data);
-      if (!data) return;
-      updateWatchRow(data.s, +data.c, (+data.c - +data.o) / +data.o * 100);
-    };
-    ws.onclose = () => setTimeout(connectWatchlistWs, opened ? 5000 : 1500);
+    state.wlWs?.close();
+    if (!WATCHLIST.length) return;
+    state.wlWs = new MarketStream('/stream?streams=' + WATCHLIST.map(([sym]) => `${sym.toLowerCase()}@miniTicker`).join('/'), {
+      staleMs: 90000,
+      onData: ({ data }) => { if (data && symbolValid(data.s) && positive(+data.c) && positive(+data.o)) updateWatchRow(data.s, +data.c, (+data.c - +data.o) / +data.o * 100); },
+    });
   }
 
   // ---------- Watchlist UI ----------
@@ -218,13 +233,14 @@
     const el = document.getElementById('watchlist');
     el.innerHTML = '';
     for (const [sym, name] of WATCHLIST) {
-      const row = document.createElement('div');
+      const row = document.createElement('button');
+      row.type = 'button';
       row.className = 'wl-row' + (sym === state.symbol ? ' active' : '');
       row.dataset.sym = sym;
       row.innerHTML = `
-        <span class="wl-sym">${sym.replace('USDT', '')}<span class="wl-name"> / USDT</span></span>
+        <span class="wl-sym">${escapeHtml(assetInfo(sym).baseAsset)}<span class="wl-name"> / ${escapeHtml(assetInfo(sym).quoteAsset)}</span></span>
         <span class="wl-price">—</span>
-        <span class="wl-name">${name}</span>
+        <span class="wl-name">${escapeHtml(name)}</span>
         <span class="wl-chg">—</span>`;
       row.addEventListener('click', () => switchSymbol(sym));
       el.appendChild(row);
@@ -271,7 +287,11 @@
   // =====================================================================
   //  INDICATORS
   // =====================================================================
-  const I = Indicators;
+  let evaluatingKey = '';
+  const I = new Proxy(Indicators, { get(target, method) { return (candles, ...args) => target[method](candles, ...(method === 'vwap' ? [state.vwapAnchor] : state.params[evaluatingKey] || args)); } });
+  let indicatorTimer;
+  function scheduleIndicators() { if (!indicatorTimer) indicatorTimer = setTimeout(() => { indicatorTimer = null; refreshIndicators(); }, 250); }
+
 
   // ---- Overlay indicator definitions: key -> () => [{opts,data,type?}] ----
   const overlayDefs = {
@@ -324,15 +344,15 @@
   function addOverlaySeries(group) {
     if (group.type === 'dots') {
       // render PSAR as tiny histogram-like markers using a line series with point markers off
-      const s = chart.addLineSeries({
-        lineWidth: 0, lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5,
+      const s = chart.addSeries(LWC.LineSeries, {
+        lineWidth: 1, lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5,
         lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
         color: '#f7b924',
       });
       s.setData(group.data);
       return s;
     }
-    const s = chart.addLineSeries({
+    const s = chart.addSeries(LWC.LineSeries, {
       ...group.opts,
       lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
     });
@@ -346,7 +366,7 @@
     rsi: {
       label: 'RSI 14',
       build(pc) {
-        const s = pc.addLineSeries({ color: '#b388ff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
+        const s = pc.addSeries(LWC.LineSeries, { color: '#b388ff', lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
         s.createPriceLine({ price: 70, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         s.createPriceLine({ price: 30, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { s };
@@ -361,9 +381,9 @@
       label: 'MACD 12 26 9',
       build(pc) {
         return {
-          hist: pc.addHistogramSeries({ lastValueVisible: false, priceLineVisible: false }),
-          line: pc.addLineSeries({ color: '#2962ff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-          sig: pc.addLineSeries({ color: '#ff6d00', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
+          hist: pc.addSeries(LWC.HistogramSeries, { lastValueVisible: false, priceLineVisible: false }),
+          line: pc.addSeries(LWC.LineSeries, { color: '#2962ff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
+          sig: pc.addSeries(LWC.LineSeries, { color: '#ff6d00', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
         };
       },
       update(m, c) {
@@ -377,8 +397,8 @@
     stoch: {
       label: 'Stoch 14 3 3',
       build(pc) {
-        const k = pc.addLineSeries({ color: '#2962ff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
-        const d = pc.addLineSeries({ color: '#ff6d00', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const k = pc.addSeries(LWC.LineSeries, { color: '#2962ff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const d = pc.addSeries(LWC.LineSeries, { color: '#ff6d00', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
         k.createPriceLine({ price: 80, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         k.createPriceLine({ price: 20, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { k, d };
@@ -393,8 +413,8 @@
     stochrsi: {
       label: 'StochRSI 14 14 3 3',
       build(pc) {
-        const k = pc.addLineSeries({ color: '#00bcd4', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
-        const d = pc.addLineSeries({ color: '#e040fb', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const k = pc.addSeries(LWC.LineSeries, { color: '#00bcd4', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const d = pc.addSeries(LWC.LineSeries, { color: '#e040fb', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
         k.createPriceLine({ price: 80, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         k.createPriceLine({ price: 20, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { k, d };
@@ -409,7 +429,7 @@
     atr: {
       label: 'ATR 14',
       build(pc) {
-        return { s: pc.addLineSeries({ color: '#f7b924', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }) };
+        return { s: pc.addSeries(LWC.LineSeries, { color: '#f7b924', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }) };
       },
       update(m, c) {
         const d = I.atr(c, 14);
@@ -421,9 +441,9 @@
       label: 'ADX/DMI 14',
       build(pc) {
         return {
-          adx: pc.addLineSeries({ color: '#f7b924', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }),
-          p: pc.addLineSeries({ color: '#26a69a', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-          m: pc.addLineSeries({ color: '#ef5350', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
+          adx: pc.addSeries(LWC.LineSeries, { color: '#f7b924', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }),
+          p: pc.addSeries(LWC.LineSeries, { color: '#26a69a', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
+          m: pc.addSeries(LWC.LineSeries, { color: '#ef5350', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
         };
       },
       update(m, c) {
@@ -437,7 +457,7 @@
     cci: {
       label: 'CCI 20',
       build(pc) {
-        const s = pc.addLineSeries({ color: '#26c6da', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const s = pc.addSeries(LWC.LineSeries, { color: '#26c6da', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
         s.createPriceLine({ price: 100, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         s.createPriceLine({ price: -100, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { s };
@@ -451,7 +471,7 @@
     mfi: {
       label: 'MFI 14',
       build(pc) {
-        const s = pc.addLineSeries({ color: '#8bc34a', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const s = pc.addSeries(LWC.LineSeries, { color: '#8bc34a', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
         s.createPriceLine({ price: 80, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         s.createPriceLine({ price: 20, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { s };
@@ -465,7 +485,7 @@
     obv: {
       label: 'OBV',
       build(pc) {
-        return { s: pc.addLineSeries({ color: '#64b5f6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }) };
+        return { s: pc.addSeries(LWC.LineSeries, { color: '#64b5f6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }) };
       },
       update(m, c) {
         const d = I.obv(c);
@@ -476,7 +496,7 @@
     willr: {
       label: 'Williams %R 14',
       build(pc) {
-        const s = pc.addLineSeries({ color: '#ff8a65', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        const s = pc.addSeries(LWC.LineSeries, { color: '#ff8a65', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
         s.createPriceLine({ price: -20, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         s.createPriceLine({ price: -80, color: '#787b86', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
         return { s };
@@ -490,7 +510,7 @@
     cvd: {
       label: 'CVD (Cumulative Volume Delta)',
       build(pc) {
-        return { s: pc.addLineSeries({ color: '#64b5f6', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }) };
+        return { s: pc.addSeries(LWC.LineSeries, { color: '#64b5f6', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }) };
       },
       update(m, c) {
         let cum = 0;
@@ -507,136 +527,66 @@
     },
   };
 
-  // Active panes: key -> { chart, seriesMap, el, valueEl }
+  // Native v5 panes share the same timestamp index and price/time interactions.
   const activePanes = {};
-  const subPanesEl = document.getElementById('sub-panes');
-
-  const subChartOpts = {
-    ...chartOpts,
-    timeScale: { ...chartOpts.timeScale, visible: false },
-    handleScroll: false, handleScale: false,
-  };
-
   function createPane(key) {
-    const def = paneDefs[key];
-    const el = document.createElement('section');
-    el.className = 'sub-pane';
-    el.innerHTML = `<div class="pane-label">${def.label} <span class="pane-value"></span>
-      <button class="pane-close" title="Remove">&times;</button></div>
-      <div class="sub-chart"></div>`;
-    subPanesEl.appendChild(el);
-    const pc = LWC.createChart(el.querySelector('.sub-chart'), subChartOpts);
-    const seriesMap = def.build(pc);
-    const pane = { chart: pc, seriesMap, el, valueEl: el.querySelector('.pane-value') };
-    activePanes[key] = pane;
-    el.querySelector('.pane-close').addEventListener('click', () => {
-      const cb = document.querySelector(`#indicators-menu input[data-ind="${key}"]`);
-      if (cb) cb.checked = false;
+    const def = paneDefs[key], index = chart.panes().length;
+    const facade = { addSeries: (type, options) => chart.addSeries(type, options, index) };
+    const seriesMap = def.build(facade);
+    const el = document.createElement('div'); el.className = 'pane-label native-pane-label';
+    el.innerHTML = `<span class="pane-title">${escapeHtml(def.label)}</span> <span class="pane-value"></span><button class="pane-close" aria-label="Remove ${escapeHtml(def.label)}">×</button>`;
+    document.getElementById('main-chart-wrap').append(el);
+    activePanes[key] = { seriesMap, el, valueEl: el.querySelector('.pane-value') };
+    el.querySelector('button').onclick = () => {
       state.indicators[key] = false;
-      refreshIndicators();
-      saveSettings();
-    });
-    syncTimeScale(pc);
-    return pane;
+      document.querySelector(`input[data-ind="${key}"],input[data-intra="${key}"]`)?.removeAttribute('checked');
+      const cb = document.querySelector(`input[data-ind="${key}"],input[data-intra="${key}"]`); if (cb) cb.checked = false;
+      refreshIndicators(); saveSettings();
+    };
   }
-
   function removePane(key) {
-    const p = activePanes[key];
-    if (!p) return;
-    p.chart.remove();
-    p.el.remove();
-    delete activePanes[key];
+    const pane = activePanes[key]; if (!pane) return;
+    Object.values(pane.seriesMap).forEach(series => chart.removeSeries(series)); pane.el.remove(); delete activePanes[key];
   }
-
   function refreshIndicators() {
     const c = state.candles;
-    if (!c.length) return;
-
-    // Overlays
     for (const key of Object.keys(overlayDefs)) {
-      const on = !!state.indicators[key];
-      if (on) {
+      evaluatingKey = key;
+      if (state.indicators[key] && c.length) {
         const groups = overlayDefs[key](c);
-        if (!overlaySeries[key]) {
-          overlaySeries[key] = groups.map(addOverlaySeries);
-        } else {
-          overlaySeries[key].forEach((s, i) => s.setData(groups[i].data));
-        }
-      } else if (overlaySeries[key]) {
-        overlaySeries[key].forEach(s => chart.removeSeries(s));
-        delete overlaySeries[key];
-      }
+        if (!overlaySeries[key]) overlaySeries[key] = groups.map(addOverlaySeries);
+        else overlaySeries[key].forEach((series, i) => series.setData(groups[i].data));
+        if (state.colors[key]) overlaySeries[key][0].applyOptions({ color: state.colors[key] });
+      } else if (overlaySeries[key]) { overlaySeries[key].forEach(series => chart.removeSeries(series)); delete overlaySeries[key]; }
     }
-
-    // Panes
-    let paneChanged = false;
+    let changed = false;
     for (const key of Object.keys(paneDefs)) {
-      const on = !!state.indicators[key];
-      if (on && !activePanes[key]) { createPane(key); paneChanged = true; }
-      if (!on && activePanes[key]) { removePane(key); paneChanged = true; }
-      if (on) {
-        const p = activePanes[key];
-        const val = paneDefs[key].update(p.seriesMap, c);
-        p.valueEl.textContent = val;
-      }
+      evaluatingKey = key;
+      if (state.indicators[key] && c.length) {
+        if (!activePanes[key]) { createPane(key); changed = true; }
+        const p = activePanes[key]; p.valueEl.textContent = paneDefs[key].update(p.seriesMap, c);
+        if (state.colors[key]) Object.values(p.seriesMap)[0].applyOptions({ color: state.colors[key] });
+        p.el.querySelector('.pane-title').textContent = key.toUpperCase() + ' ' + (state.params[key]?.join(' / ') || paneDefs[key].label.replace(/^[^ ]+\s*/, ''));
+      } else if (activePanes[key]) { removePane(key); changed = true; }
     }
-    if (paneChanged) {
-      adjustPaneHeights();
-      requestAnimationFrame(() => { matchAllRanges(); resizeMain(); });
-    } else {
-      matchAllRanges();
-    }
+    evaluatingKey = '';
+    if (changed) adjustPaneHeights();
+    schedulePaint();
   }
-
   function adjustPaneHeights() {
-    const n = Object.keys(activePanes).length;
-    if (!n) return;
-    // fewer panes -> taller panes; cap total at ~45% of chart area
-    const h = Math.max(90, Math.min(150, Math.floor(340 / n)));
-    for (const key of Object.keys(activePanes)) {
-      activePanes[key].el.style.flexBasis = h + 'px';
-    }
-    requestAnimationFrame(() => {
-      for (const key of Object.keys(activePanes)) {
-        const p = activePanes[key];
-        const el = p.el.querySelector('.sub-chart');
-        p.chart.resize(el.clientWidth, el.clientHeight);
-      }
-    });
+    const panes = chart.panes(), available = Math.max(200, mainEl.clientHeight - 28), n = panes.length - 1;
+    const h = n ? Math.max(30, Math.min(130, available * .45 / n)) : 0;
+    panes.forEach((pane, index) => pane.setHeight(index ? h : Math.max(80, available - h * n)));
+    requestAnimationFrame(() => { resizeOverlay(); positionPaneLabels(); });
   }
-
-  // Time-scale sync between main chart and all panes
-  let syncing = false;
-  chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (syncing || !range) return;
-    syncing = true;
-    for (const key of Object.keys(activePanes)) {
-      activePanes[key].chart.timeScale().setVisibleLogicalRange(range);
+  function positionPaneLabels() {
+    const panes = chart.panes();
+    for (const pane of Object.values(activePanes)) {
+      const index = Object.values(pane.seriesMap)[0].getPane().paneIndex();
+      pane.el.style.top = (panes.slice(0, index).reduce((sum, p) => sum + p.getHeight() + 1, 0) + 6) + 'px';
     }
-    syncing = false;
-    redrawOverlay();
-  });
-  function syncTimeScale(sub) {
-    sub.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncing || !range) return;
-      syncing = true;
-      chart.timeScale().setVisibleLogicalRange(range);
-      for (const key of Object.keys(activePanes)) {
-        const pc = activePanes[key].chart;
-        if (pc !== sub) pc.timeScale().setVisibleLogicalRange(range);
-      }
-      syncing = false;
-    });
   }
-  function matchAllRanges() {
-    const r = chart.timeScale().getVisibleLogicalRange();
-    if (!r) return;
-    syncing = true;
-    for (const key of Object.keys(activePanes)) {
-      activePanes[key].chart.timeScale().setVisibleLogicalRange(r);
-    }
-    syncing = false;
-  }
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => schedulePaint());
 
   // ---------- Legend / crosshair ----------
   function updateLegend(bar) {
@@ -645,7 +595,7 @@
     const up = c.close >= c.open;
     const cls = up ? 'up' : 'down';
     document.getElementById('legend').innerHTML = `
-      <div class="lg-sym">${state.symbol} · ${state.interval.toUpperCase()} · Binance</div>
+      <div class="lg-sym">${escapeHtml(state.symbol)} · ${escapeHtml(state.interval.toUpperCase())} · Binance</div>
       <div class="lg-row">
         <span>O <b class="${cls}">${fmtPrice(c.open)}</b></span>
         <span>H <b class="${cls}">${fmtPrice(c.high)}</b></span>
@@ -678,29 +628,32 @@
   const FIB_COLORS = ['#787b86', '#ef5350', '#ff9800', '#f7b924', '#26a69a', '#00bcd4', '#787b86'];
 
   function storageKey() { return `chartpro-drawings-${state.symbol}`; }
-  function saveDrawings() {
-    try { localStorage.setItem(storageKey(), JSON.stringify(state.drawings)); } catch (e) {}
+  const drawingHistory = new History();
+  function saveDrawings(record = true) {
+    if (!drawingsValid(state.drawings)) { toast('Invalid drawing or drawing limit reached (300).', 'error'); return; }
+    if (record) drawingHistory.push(state.drawings);
+    writeStorage(storageKey(), state.drawings);
+    document.getElementById('undo-drawing').disabled = drawingHistory.index === 0;
+    document.getElementById('redo-drawing').disabled = drawingHistory.index === drawingHistory.entries.length - 1;
   }
   function loadDrawings() {
-    try {
-      state.drawings = JSON.parse(localStorage.getItem(storageKey())) || [];
-    } catch (e) { state.drawings = []; }
-    state.selectedIdx = -1;
+    state.drawings = readStorage(storageKey(), [], drawingsValid);
+    drawingHistory.reset(state.drawings); state.selectedIdx = -1;
   }
 
   function resizeOverlay() {
     const r = mainEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     overlay.width = r.width * dpr;
-    overlay.height = r.height * dpr;
+    overlay.height = Math.max(0, chart.panes()[0].getHeight()) * dpr;
     overlay.style.width = r.width + 'px';
-    overlay.style.height = r.height + 'px';
+    overlay.style.height = chart.panes()[0].getHeight() + 'px';
     octx.setTransform(dpr, 0, 0, dpr, 0, 0);
     redrawOverlay();
   }
 
   function toXY(pt) {
-    const x = chart.timeScale().timeToCoordinate(pt.time);
+    const x = xForTime(pt.time);
     const y = priceSeries ? priceSeries.priceToCoordinate(pt.price) : null;
     return (x == null || y == null) ? null : { x, y };
   }
@@ -715,7 +668,7 @@
         time = state.candles[0].time + Math.round(logical) * step;
       }
     }
-    return (time == null || price == null) ? null : { time, price };
+    return (time == null || !positive(price) || y > chart.panes()[0].getHeight() || x >= mainEl.clientWidth - chart.priceScale('right').width()) ? null : { time, price };
   }
 
   // Magnet: snap price to nearest OHLC of the bar at `time`
@@ -732,7 +685,11 @@
     return { time: pt.time, price: best };
   }
 
+  let paintFrame;
+  function schedulePaint() { if (!paintFrame) paintFrame = requestAnimationFrame(() => { paintFrame = null; redrawOverlay(); }); }
   function redrawOverlay() {
+    if (overlay.clientHeight !== chart.panes()[0].getHeight()) { resizeOverlay(); return; }
+    positionPaneLabels();
     octx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
     drawSessions();
     drawVProfile();
@@ -769,7 +726,7 @@
       if (selected) handle(w / 2, y);
 
     } else if (d.type === 'vline') {
-      const x = chart.timeScale().timeToCoordinate(P[0].time);
+      const x = xForTime(P[0].time);
       if (x == null) { octx.restore(); return; }
       line(x, 0, x, h);
       if (selected) handle(x, h / 2);
@@ -842,7 +799,8 @@
       octx.strokeStyle = '#26a69a'; line(pc.x1, pc.yT, pc.x2, pc.yT);
       octx.strokeStyle = '#ef5350'; line(pc.x1, pc.yS, pc.x2, pc.yS);
       const reward = Math.abs(target.price - entry.price);
-      const risk = Math.abs(entry.price - stop.price);
+      const valid = d.type === 'long' ? target.price > entry.price && stop.price < entry.price : target.price < entry.price && stop.price > entry.price;
+      const risk = valid ? Math.abs(entry.price - stop.price) : 0;
       const rr = risk > 0 ? reward / risk : 0;
       const pctT = (target.price - entry.price) / entry.price * 100;
       const pctS = (stop.price - entry.price) / entry.price * 100;
@@ -852,7 +810,7 @@
       octx.fillStyle = '#ef5350';
       octx.fillText(`Stop ${fmtPrice(stop.price)} (${pctS >= 0 ? '+' : ''}${pctS.toFixed(2)}%)`, pc.x1 + 4, pc.yS + (pc.yS > pc.yE ? 13 : -5));
       octx.fillStyle = '#d1d4dc';
-      octx.fillText(`${d.type === 'long' ? 'LONG' : 'SHORT'} ${fmtPrice(entry.price)} · R/R ${rr.toFixed(2)}`, pc.x1 + 4, pc.yE - 5);
+      octx.fillText(`${d.type === 'long' ? 'LONG' : 'SHORT'} ${fmtPrice(entry.price)} · ${valid ? 'R/R ' + rr.toFixed(2) : 'INVALID LEVELS'}`, pc.x1 + 4, pc.yE - 5);
       if (selected) { handle(pc.x1, pc.yE); handle(pc.x2, pc.yT); handle(pc.x2, pc.yS); }
 
     } else if (d.type === 'ruler') {
@@ -972,11 +930,12 @@
     for (let i = state.drawings.length - 1; i >= 0; i--) {
       const d = state.drawings[i];
       const P = d.points;
+      if (d.locked) continue;
       if (d.type === 'hline') {
         const yy = priceSeries.priceToCoordinate(P[0].price);
         if (yy != null && Math.abs(y - yy) < 6) return { idx: i, part: 'body' };
       } else if (d.type === 'vline') {
-        const xx = chart.timeScale().timeToCoordinate(P[0].time);
+        const xx = xForTime(P[0].time);
         if (xx != null && Math.abs(x - xx) < 6) return { idx: i, part: 'body' };
       } else if (d.type === 'text') {
         const a = toXY(P[0]);
@@ -1035,7 +994,9 @@
   let dragging = null;   // { idx, part, startPt, orig }
   let brushing = false;
 
-  overlay.addEventListener('mousedown', e => {
+  overlay.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !state.loaded) return;
+    overlay.setPointerCapture(e.pointerId);
     const rect = overlay.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     const tool = state.drawTool;
@@ -1060,6 +1021,7 @@
 
     const pt = snap(toPoint(x, y));
     if (!pt) return;
+    if (state.drawings.length >= 300 && !state.pendingPoints.length) { toast('Drawing limit reached. Export or remove drawings.', 'error'); return; }
 
     if (tool === 'alert') {
       addAlert(pt.price);
@@ -1079,7 +1041,7 @@
       if (tool === 'text') {
         const txt = prompt('Note text:', '');
         if (!txt) { selectTool('cursor'); return; }
-        shape.text = txt;
+        shape.text = txt.slice(0, 1000);
       }
       state.drawings.push(shape);
       saveDrawings();
@@ -1094,6 +1056,7 @@
       } else {
         const shape = { type: tool, points: [state.pendingPoints[0], pt], ...styleProps() };
         if (tool === 'long' || tool === 'short') {
+          if ((tool === 'long' && pt.price <= shape.points[0].price) || (tool === 'short' && pt.price >= shape.points[0].price)) { toast('Place the target above entry for long, below entry for short.', 'error'); return; }
           shape.points.push(autoStop(tool, shape.points[0], shape.points[1]));
         }
         state.drawings.push(shape);
@@ -1106,13 +1069,13 @@
     }
   });
 
-  overlay.addEventListener('mousemove', e => {
+  overlay.addEventListener('pointermove', e => {
     const rect = overlay.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
 
     if (brushing) {
       const pt = toPoint(x, y);
-      if (pt) {
+      if (pt && state.drawings.at(-1)?.points.length < 5000) {
         state.drawings[state.drawings.length - 1].points.push(pt);
         redrawOverlay();
       }
@@ -1149,7 +1112,7 @@
     }
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('pointerup', () => {
     if (brushing) {
       brushing = false;
       saveDrawings();
@@ -1163,7 +1126,8 @@
   });
 
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.target.closest('input,textarea,select,[contenteditable],dialog,.modal')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 'Escape') {
       state.pendingPoints = [];
       state.hoverPoint = null;
@@ -1204,14 +1168,15 @@
 
   // In cursor mode the overlay is pointer-transparent so the chart pans normally.
   // We listen on the wrapper to catch clicks near drawings for selection.
-  document.getElementById('main-chart-wrap').addEventListener('mousedown', e => {
-    if (state.drawTool !== 'cursor') return;
+  document.getElementById('main-chart-wrap').addEventListener('pointerdown', e => {
+    if (state.drawTool !== 'cursor' || e.button !== 0 || !state.loaded || e.target.closest('.pane-label,#candle-story')) return;
     const rect = overlay.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     const hit = hitTest(x, y);
     if (hit) {
       // enable overlay to own this drag
       overlay.style.pointerEvents = 'auto';
+      overlay.setPointerCapture(e.pointerId);
       state.selectedIdx = hit.idx;
       const pt = toPoint(x, y);
       dragging = {
@@ -1229,14 +1194,17 @@
     }
   }, true);
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('pointerup', () => {
     if (state.drawTool === 'cursor' && !dragging) overlay.style.pointerEvents = 'none';
   });
 
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn =>
     btn.addEventListener('click', () => selectTool(btn.dataset.tool)));
 
-  document.getElementById('clear-drawings').addEventListener('click', () => {
+  document.getElementById('clear-drawings').addEventListener('click', async () => {
+    if (!state.drawings.length) return;
+    const yes = await showDialog('Clear drawings?', '<p>Remove drawings for this symbol? You can undo this action.</p>', null, { submit: 'Clear drawings', destructive: true });
+    if (!yes) return;
     state.drawings = [];
     state.selectedIdx = -1;
     saveDrawings();
@@ -1320,7 +1288,7 @@
 
   function updateSmc() {
     if (!smcEnabled()) { smcAnalysis = null; redrawOverlay(); return; }
-    smcAnalysis = SMC.analyze(state.candles);
+    smcAnalysis = SMC.analyze(state.candles.filter(c => c.time + INTERVALS[state.interval] <= Date.now() / 1000), state.smcOptions);
     smcLastRun = Date.now();
     redrawOverlay();
   }
@@ -1335,12 +1303,16 @@
 
   // Map any time (even off-scale) to an x coordinate via logical index
   function xForTime(t) {
-    if (state.candles.length > 1) {
-      const idx = (t - state.candles[0].time) / barStep();
-      const x = chart.timeScale().logicalToCoordinate(idx);
-      if (x != null) return x;
-    }
-    return chart.timeScale().timeToCoordinate(t);
+    const direct = chart.timeScale().timeToCoordinate(t);
+    if (direct != null) return direct;
+    const c = state.candles;
+    if (c.length < 2) return null;
+    let lo = 0, hi = c.length - 1;
+    while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (c[mid].time < t) lo = mid + 1; else hi = mid; }
+    const left = t < c[0].time ? 0 : t > c.at(-1).time ? c.length - 1 : Math.max(0, lo - 1);
+    const origin = chart.timeScale().timeToCoordinate(c[left].time);
+    const logical = (chart.timeScale().coordinateToLogical(origin) ?? left) + (t - c[left].time) / INTERVALS[state.interval];
+    return chart.timeScale().logicalToCoordinate(logical);
   }
 
   function drawSmc() {
@@ -1471,14 +1443,16 @@
   let lastTickPrice = null;
 
   function loadAlerts() {
-    try { alerts = JSON.parse(localStorage.getItem('chartpro-alerts')) || []; } catch (e) { alerts = []; }
+    alerts = readStorage('chartpro-alerts', [], alertsValid);
   }
   function saveAlerts() {
-    try { localStorage.setItem('chartpro-alerts', JSON.stringify(alerts)); } catch (e) {}
+    writeStorage('chartpro-alerts', alerts);
   }
 
   function addAlert(price) {
-    alerts.push({ id: Date.now(), symbol: state.symbol, price, triggered: false, created: Date.now() });
+    if (!positive(price) || alerts.length >= 200) { toast('Invalid price or alert limit reached.', 'error'); return; }
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume().catch(() => {});
+    alerts.push({ id: crypto.randomUUID(), symbol: state.symbol, price, triggered: false, created: Date.now() });
     saveAlerts();
     renderAlertsList();
     redrawOverlay();
@@ -1499,11 +1473,9 @@
         a.triggered = true;
         a.triggeredAt = Date.now();
         changed = true;
-        beep();
+        beep(); toast(`${a.symbol} crossed ${fmtPrice(a.price)}`, 'success');
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(`🔔 ${a.symbol} alert`, {
-            body: `Price crossed ${fmtPrice(a.price)} (now ${fmtPrice(price)})`,
-          });
+          try { new Notification(`${a.symbol} alert`, { body: `Price crossed ${fmtPrice(a.price)} (now ${fmtPrice(price)})` }); } catch { /* in-app notice remains available */ }
         }
       }
     }
@@ -1556,10 +1528,11 @@
       const row = document.createElement('div');
       row.className = 'alert-row' + (a.triggered ? ' done' : '');
       row.innerHTML = `
-        <span class="al-sym">${a.symbol}</span>
+        <span class="al-sym">${escapeHtml(a.symbol)}</span>
         <span class="al-price">${fmtPrice(a.price)}</span>
         <span class="al-status">${a.triggered ? '✓ fired' : 'armed'}</span>
         <button class="al-del" title="Delete"><i class="fa-solid fa-xmark"></i></button>`;
+      row.querySelector('.al-del').setAttribute('aria-label', 'Delete alert');
       row.querySelector('.al-del').addEventListener('click', () => {
         alerts = alerts.filter(x => x.id !== a.id);
         saveAlerts();
@@ -1586,13 +1559,13 @@
 
   // ignore "clicks" that were actually pans/drags
   let csDown = null;
-  document.getElementById('main-chart-wrap').addEventListener('mousedown', e => {
+  document.getElementById('main-chart-wrap').addEventListener('pointerdown', e => {
     csDown = { x: e.clientX, y: e.clientY };
   }, true);
   document.getElementById('main-chart-wrap').addEventListener('touchstart', e => {
     if (e.touches.length === 1) csDown = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   }, { capture: true, passive: true });
-  document.getElementById('main-chart-wrap').addEventListener('mouseup', e => {
+  document.getElementById('main-chart-wrap').addEventListener('pointerup', e => {
     if (csDown && csDown !== 'moved' && Math.hypot(e.clientX - csDown.x, e.clientY - csDown.y) > 6) csDown = 'moved';
   }, true);
 
@@ -1638,15 +1611,15 @@
 
     // ---- verdict ----
     let verdict, vClass;
-    if (buyPct >= 65)      { verdict = 'Buyers are strong';   vClass = 'buy'; }
-    else if (buyPct >= 55) { verdict = 'Buyers in control';   vClass = 'buy'; }
+    if (buyPct >= 65)      { verdict = 'Strong buy-side aggression';   vClass = 'buy'; }
+    else if (buyPct >= 55) { verdict = 'Buy-side aggression';   vClass = 'buy'; }
     else if (buyPct > 45)  { verdict = up ? 'Balanced — slight buy edge' : 'Balanced — slight sell edge'; vClass = 'flat'; }
-    else if (buyPct > 35)  { verdict = 'Sellers in control';  vClass = 'sell'; }
-    else                   { verdict = 'Sellers are strong';  vClass = 'sell'; }
+    else if (buyPct > 35)  { verdict = 'Sell-side aggression';  vClass = 'sell'; }
+    else                   { verdict = 'Strong sell-side aggression';  vClass = 'sell'; }
 
     // ---- story notes ----
     const notes = [];
-    if (isLive) notes.push('⏳ Candle still forming — updating live.');
+    if (isLive) notes.push('Candle still forming. Volume comparisons are provisional.');
     if (closeLoc >= 0.8) notes.push('Close near the high — buyers finished on top.');
     else if (closeLoc <= 0.2) notes.push('Close near the low — sellers finished on top.');
     if (lowerWick > body * 2 && lowerWick > range * 0.35)
@@ -1655,7 +1628,7 @@
       notes.push('Long upper wick — buyers pushed up but sellers faded it (rejection of highs).');
     if (body / range < 0.12) notes.push('Doji-like body — indecision between buyers and sellers.');
     else if (body / range > 0.75) notes.push(up ? 'Full-bodied bullish candle — one-sided buying.' : 'Full-bodied bearish candle — one-sided selling.');
-    if (volRatio != null) {
+    if (volRatio != null && !isLive) {
       if (volRatio >= 2) notes.push(`Volume spike ×${volRatio.toFixed(1)} vs recent average — strong participation.`);
       else if (volRatio >= 1.4) notes.push('Above-average volume — the move has backing.');
       else if (volRatio <= 0.5) notes.push('Very low volume — weak conviction behind this candle.');
@@ -1682,8 +1655,8 @@
     const vd = document.getElementById('cs-verdict');
     vd.textContent = verdict;
     vd.className = 'cs-verdict ' + vClass;
-    document.getElementById('cs-buy-label').textContent = `Buyers ${buyPct.toFixed(1)}%`;
-    document.getElementById('cs-sell-label').textContent = `${(100 - buyPct).toFixed(1)}% Sellers`;
+    document.getElementById('cs-buy-label').textContent = `Taker buy ${buyPct.toFixed(1)}%`;
+    document.getElementById('cs-sell-label').textContent = `${(100 - buyPct).toFixed(1)}% taker sell`;
     document.getElementById('cs-buy-fill').style.width = buyPct.toFixed(2) + '%';
     document.getElementById('cs-o').textContent = fmtPrice(c.open);
     document.getElementById('cs-h').textContent = fmtPrice(c.high);
@@ -1707,49 +1680,34 @@
   //  INTRADAY: session boxes, key levels, volume profile, countdown
   // =====================================================================
   const SESSIONS = [
-    { name: 'Asia', start: 0, end: 8, color: '38,166,154' },
-    { name: 'London', start: 7, end: 16, color: '247,185,36' },
-    { name: 'New York', start: 12.5, end: 21, color: '224,64,251' },
-  ];
+    { name: 'Tokyo', zone: 'Asia/Tokyo', start: 9, end: 17, color: '38,166,154' },
+    { name: 'London', zone: 'Europe/London', start: 8, end: 17, color: '247,185,36' },
+    { name: 'New York', zone: 'America/New_York', start: 8, end: 17, color: '224,64,251' },
+  ].map(s => ({ ...s, formatter: new Intl.DateTimeFormat('en-CA', { timeZone: s.zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) }));
+  let sessionCache = { version: -1, boxes: [] };
   const INTRADAY_TFS = ['1m', '5m', '15m', '1h'];
 
   function drawSessions() {
-    if (!state.intraday.sessions || !priceSeries) return;
-    if (!INTRADAY_TFS.includes(state.interval)) return;
-    const c = state.candles;
-    if (c.length < 2) return;
-    const h = overlay.clientHeight;
-    octx.save();
-    octx.font = 'bold 9px Inter';
-    const firstDay = Math.floor(c[0].time / 86400);
-    const lastDay = Math.floor(c[c.length - 1].time / 86400);
-    for (let day = Math.max(firstDay, lastDay - 14); day <= lastDay; day++) {
-      for (const s of SESSIONS) {
-        const t1 = day * 86400 + s.start * 3600;
-        const t2 = day * 86400 + s.end * 3600;
-        // session hi/lo from candles inside the window
-        let hi = -Infinity, lo = Infinity, found = false;
-        for (const bar of c) {
-          if (bar.time >= t1 && bar.time < t2) {
-            hi = Math.max(hi, bar.high);
-            lo = Math.min(lo, bar.low);
-            found = true;
-          }
-        }
-        if (!found) continue;
-        const x1 = xForTime(t1), x2 = xForTime(t2);
-        const y1 = priceSeries.priceToCoordinate(hi), y2 = priceSeries.priceToCoordinate(lo);
-        if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
-        if (x2 < 0 || x1 > overlay.clientWidth) continue;
-        octx.fillStyle = `rgba(${s.color},0.07)`;
-        octx.fillRect(x1, y1, x2 - x1, y2 - y1);
-        octx.strokeStyle = `rgba(${s.color},0.35)`;
-        octx.setLineDash([2, 3]);
-        octx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-        octx.setLineDash([]);
-        octx.fillStyle = `rgba(${s.color},0.9)`;
-        octx.fillText(s.name, x1 + 3, Math.max(10, y1 + 10));
+    if (!state.intraday.sessions || !priceSeries || !INTRADAY_TFS.includes(state.interval)) return;
+    if (sessionCache.version !== dataVersion) {
+      const boxes = new Map();
+      for (const s of SESSIONS) for (const bar of state.candles) {
+        const parts = Object.fromEntries(s.formatter.formatToParts(bar.time * 1000).map(p => [p.type, p.value]));
+        const hour = +parts.hour + +parts.minute / 60;
+        if (hour < s.start || hour >= s.end) continue;
+        const key = `${s.name}-${parts.year}-${parts.month}-${parts.day}`;
+        const box = boxes.get(key) || { name: s.name, color: s.color, start: bar.time, end: bar.time, hi: -Infinity, lo: Infinity };
+        box.end = bar.time + INTERVALS[state.interval]; box.hi = Math.max(box.hi, bar.high); box.lo = Math.min(box.lo, bar.low); boxes.set(key, box);
       }
+      sessionCache = { version: dataVersion, boxes: [...boxes.values()].slice(-45) };
+    }
+    octx.save(); octx.font = 'bold 10px Inter';
+    for (const b of sessionCache.boxes) {
+      const x1 = xForTime(b.start), x2 = xForTime(b.end), y1 = priceSeries.priceToCoordinate(b.hi), y2 = priceSeries.priceToCoordinate(b.lo);
+      if ([x1, x2, y1, y2].some(v => v == null) || x2 < 0 || x1 > overlay.clientWidth) continue;
+      octx.fillStyle = `rgba(${b.color},.07)`; octx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      octx.strokeStyle = `rgba(${b.color},.35)`; octx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      octx.fillStyle = `rgba(${b.color},.9)`; octx.fillText(b.name, x1 + 3, y1 + 12);
     }
     octx.restore();
   }
@@ -1757,12 +1715,14 @@
   // ---- PDH / PDL / PWH / PWL ----
   let keyLevels = null; // { pdh, pdl, pwh, pwl }
   async function loadKeyLevels() {
+    const task = levelsTask.begin(), symbol = state.symbol;
     keyLevels = null;
     try {
       const [days, weeks] = await Promise.all([
-        apiFetch(`/api/v3/klines?symbol=${state.symbol}&interval=1d&limit=3`),
-        apiFetch(`/api/v3/klines?symbol=${state.symbol}&interval=1w&limit=3`),
+        apiFetch(`/api/v3/klines?symbol=${symbol}&interval=1d&limit=3`, { signal: task.signal }),
+        apiFetch(`/api/v3/klines?symbol=${symbol}&interval=1w&limit=3`, { signal: task.signal }),
       ]);
+      if (!task.current() || symbol !== state.symbol) return;
       // second-to-last = previous completed period
       const pd = days.length >= 2 ? days[days.length - 2] : null;
       const pw = weeks.length >= 2 ? weeks[weeks.length - 2] : null;
@@ -1802,10 +1762,12 @@
   }
 
   // ---- Volume Profile (POC / VAH / VAL) ----
+  let profileCache = null;
   function drawVProfile() {
     if (!state.intraday.vprofile || !priceSeries) return;
     const c = state.candles;
     if (c.length < 10) return;
+    if (!profileCache || profileCache.version !== dataVersion) {
     const BINS = 48;
     let min = Infinity, max = -Infinity;
     for (const b of c) { min = Math.min(min, b.low); max = Math.max(max, b.high); }
@@ -1828,6 +1790,9 @@
       if (nextHi >= nextLo) { hi++; covered += bins[hi]; }
       else { lo--; covered += bins[lo]; }
     }
+      profileCache = { version: dataVersion, BINS, min, max, bins, poc, lo, hi };
+    }
+    const { BINS, min, max, bins, poc, lo, hi } = profileCache;
     const w = overlay.clientWidth;
     const maxBin = bins[poc];
     const priceOfBin = i => min + (i + 0.5) / BINS * (max - min);
@@ -1867,7 +1832,11 @@
   // ---- Candle countdown (badge under the live price on the price axis) ----
   const TF_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800 };
   let countdownText = '';
+  let levelDay = Math.floor(Date.now() / 86400000);
   setInterval(() => {
+    const day = Math.floor(Date.now() / 86400000);
+    if (day !== levelDay) { levelDay = day; loadKeyLevels(); }
+    if (state.loaded && lastMarketEvent && Date.now() - lastMarketEvent > 35000) setConn('stale', 'Stale market data');
     const el = document.getElementById('candle-countdown');
     if (!state.intraday.countdown || !state.candles.length) {
       el.style.display = 'none';
@@ -1882,7 +1851,7 @@
     const p = n => String(n).padStart(2, '0');
     countdownText = `${hh > 0 ? p(hh) + ':' : ''}${p(mm)}:${p(ss)}`;
     el.innerHTML = `<i class="fa-regular fa-clock"></i> ${countdownText}`;
-    redrawOverlay(); // repaints the on-axis countdown badge
+    schedulePaint(); // cached analytics; one canvas frame
   }, 1000);
 
   // Countdown badge painted right below the last-price label on the price scale
@@ -1963,31 +1932,23 @@
     requestAnimationFrame(() => { resizeMain(); adjustPaneHeights(); });
   });
 
-  function disconnectBook() { if (bookWs) { bookWs.onclose = null; bookWs.close(); bookWs = null; } }
-  function disconnectTape() { if (tapeWs) { tapeWs.onclose = null; tapeWs.close(); tapeWs = null; } }
-
+  function disconnectBook() { bookWs?.close(); bookWs = null; }
+  function disconnectTape() { tapeWs?.close(); tapeWs = null; }
   function connectBook() {
     disconnectBook();
-    // NOTE: valid partial-depth speeds are default (1000ms) or @100ms only
-    const ws = new WebSocket(`${WSS()}/ws/${state.symbol.toLowerCase()}@depth20`);
-    bookWs = ws;
-    let opened = false;
-    ws.addEventListener('open', () => { opened = true; });
-    ws.onmessage = ev => {
-      const d = JSON.parse(ev.data);
-      if (d.bids && d.asks) renderBook(d.bids, d.asks);
-    };
-    ws.onclose = () => {
-      if (!opened) wssIdx = (wssIdx + 1) % WSS_HOSTS.length; // host failover
-      if (bookWs === ws && currentTab === 'book') setTimeout(connectBook, opened ? 2000 : 500);
-    };
-    ws.onerror = () => ws.close();
+    if (!sidebarIsVisible() || currentTab !== 'book') return;
+    const symbol = state.symbol;
+    document.getElementById('ob-mid').textContent = 'Connecting…';
+    bookWs = new MarketStream(`/ws/${symbol.toLowerCase()}@depth20`, {
+      onData: d => { if (symbol === state.symbol && d.bids?.length && d.asks?.length) renderBook(d.bids, d.asks); },
+      onStatus: status => { if (status !== 'live') document.getElementById('ob-mid').textContent = status + ' · book'; },
+    });
   }
 
   function renderBook(bids, asks) {
     const mid = (+bids[0][0] + +asks[0][0]) / 2;
     document.getElementById('ob-mid').textContent = fmtPrice(mid);
-    const N = 12;
+    const N = 20;
     const build = (levels, el, isAsk) => {
       let cum = 0;
       const rows = levels.slice(0, N).map(([p, q]) => { cum += +q; return { p: +p, q: +q, cum }; });
@@ -2007,32 +1968,27 @@
 
   function connectTape() {
     disconnectTape();
-    const ws = new WebSocket(`${WSS()}/ws/${state.symbol.toLowerCase()}@aggTrade`);
-    tapeWs = ws;
-    const rowsEl = document.getElementById('tape-rows');
-    rowsEl.innerHTML = '';
-    let opened = false;
-    ws.addEventListener('open', () => { opened = true; });
-    ws.onmessage = ev => {
-      const t = JSON.parse(ev.data);
-      const price = +t.p, qty = +t.q, quote = price * qty;
-      const sell = t.m; // buyer is maker => aggressive sell
-      const row = document.createElement('div');
-      const whale = quote >= 100000 ? ' whale' : quote >= 25000 ? ' big' : '';
-      row.className = 'tape-row' + whale;
-      const d = new Date(t.T);
-      row.innerHTML = `
-        <span class="tp-time">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}</span>
-        <span class="tp-price ${sell ? 'down' : 'up'}">${fmtPrice(price)}</span>
-        <span class="tp-qty">${fmtCompact(quote)}</span>`;
-      rowsEl.prepend(row);
-      while (rowsEl.children.length > 80) rowsEl.lastChild.remove();
-    };
-    ws.onclose = () => {
-      if (!opened) wssIdx = (wssIdx + 1) % WSS_HOSTS.length; // host failover
-      if (tapeWs === ws && currentTab === 'tape') setTimeout(connectTape, opened ? 2000 : 500);
-    };
-    ws.onerror = () => ws.close();
+    if (!sidebarIsVisible() || currentTab !== 'tape') return;
+    const symbol = state.symbol, rowsEl = document.getElementById('tape-rows'); rowsEl.innerHTML = '';
+    let pending = [], frame;
+    tapeWs = new MarketStream(`/ws/${symbol.toLowerCase()}@aggTrade`, {
+      staleMs: 90000,
+      onData: t => {
+        if (symbol !== state.symbol || !positive(+t.p) || !positive(+t.q)) return;
+        pending.push(t); pending = pending.slice(-80);
+        if (!frame) frame = requestAnimationFrame(() => {
+          frame = null; if (symbol !== state.symbol || currentTab !== 'tape') { pending = []; return; }
+          const frag = document.createDocumentFragment();
+          for (const t of pending.reverse()) {
+            const quote = +t.p * +t.q, dollars = ['USDT', 'USDC', 'FDUSD'].includes(assetInfo(symbol).quoteAsset);
+            const row = document.createElement('div'); row.className = 'tape-row' + (dollars && quote >= 100000 ? ' whale' : dollars && quote >= 25000 ? ' big' : '');
+            row.innerHTML = `<span class="tp-time">${new Date(t.T).toLocaleTimeString('en-GB', { timeZone: 'UTC' })}</span><span class="tp-price ${t.m ? 'down' : 'up'}">${fmtPrice(+t.p)}</span><span class="tp-qty">${fmtCompact(quote)}</span>`; frag.append(row);
+          }
+          pending = []; rowsEl.prepend(frag); while (rowsEl.children.length > 80) rowsEl.lastChild.remove();
+        });
+      },
+      onStatus: status => { document.getElementById('tape-status').textContent = `${status} · ${assetInfo(symbol).quoteAsset} notional · UTC`; },
+    });
   }
 
   function fmtQty(v) {
@@ -2065,27 +2021,32 @@
     document.getElementById(id).addEventListener('input', calcUpdate));
 
   function calcUpdate() {
-    const acct = +document.getElementById('calc-account').value || 0;
-    const riskPct = +document.getElementById('calc-risk').value || 0;
-    const entry = +document.getElementById('calc-entry').value || 0;
-    const stop = +document.getElementById('calc-stop').value || 0;
-    const lev = Math.max(1, +document.getElementById('calc-lev').value || 1);
-    const riskAmt = acct * riskPct / 100;
-    const dist = Math.abs(entry - stop);
-    const qty = entry > 0 && dist > 0 ? riskAmt / dist : 0;
-    const value = qty * entry;
-    document.getElementById('calc-riskamt').textContent = riskAmt ? riskAmt.toFixed(2) + ' USDT' : '—';
-    document.getElementById('calc-qty').textContent = qty ? qty.toFixed(6) + ' ' + state.symbol.replace('USDT', '') : '—';
-    document.getElementById('calc-value').textContent = value ? value.toFixed(2) + ' USDT' : '—';
-    document.getElementById('calc-margin').textContent = value ? (value / lev).toFixed(2) + ' USDT' : '—';
+    const acct = +document.getElementById('calc-account').value;
+    const riskPct = +document.getElementById('calc-risk').value;
+    const entry = +document.getElementById('calc-entry').value;
+    const stop = +document.getElementById('calc-stop').value;
+    const lev = +document.getElementById('calc-lev').value;
+    const valid = [acct, riskPct, entry, stop, lev].every(positive) && riskPct <= 100 && lev >= 1 && lev <= 125 && entry !== stop;
+    const riskAmt = acct * riskPct / 100, dist = Math.abs(entry - stop);
+    const step = state.market.stepSize || 0.00000001;
+    const qty = valid ? Math.floor(riskAmt / dist / step) * step : 0, value = qty * entry;
+    const { baseAsset, quoteAsset } = state.market;
+    document.getElementById('calc-riskamt').textContent = valid ? fmtPrice(riskAmt) + ' ' + quoteAsset : '—';
+    document.getElementById('calc-qty').textContent = qty ? priceFormat(qty) + ' ' + baseAsset : '—';
+    document.getElementById('calc-value').textContent = qty ? fmtPrice(value) + ' ' + quoteAsset : '—';
+    document.getElementById('calc-margin').textContent = qty ? fmtPrice(value / lev) + ' ' + quoteAsset : '—';
+    document.getElementById('calc-feedback').textContent = !valid ? 'Enter positive values, different entry and stop, risk ≤100%, and leverage 1–125.' : value / lev > acct ? 'Warning: required margin exceeds account balance.' : 'Estimate excludes fees, slippage and liquidation. Leverage does not reduce stop-loss risk.';
+    document.getElementById('calc-account-label').textContent = 'Account size (' + quoteAsset + ')';
   }
 
   function applyUrlParams() {
     const q = new URLSearchParams(location.search);
     const sym = q.get('symbol');
     const tf = q.get('tf');
-    if (sym) state.symbol = sym.toUpperCase();
-    if (tf) state.interval = tf;
+    if (sym && symbolValid(sym.toUpperCase())) state.symbol = sym.toUpperCase();
+    else if (sym) toast('Invalid market URL parameter ignored.', 'error');
+    if (tf && Object.hasOwn(INTERVALS, tf)) state.interval = tf;
+    else if (tf) toast('Unsupported timeframe ignored.', 'error');
     if (sym || tf) {
       document.getElementById('symbol-label').textContent = state.symbol;
       document.querySelectorAll('.tf-btn').forEach(b =>
@@ -2096,26 +2057,26 @@
   // ---------- Settings persistence ----------
   function saveSettings() {
     try {
-      localStorage.setItem('chartpro-settings', JSON.stringify({
+      writeStorage('chartpro-settings', {
         symbol: state.symbol,
         interval: state.interval,
         chartType: state.chartType,
         indicators: state.indicators,
         smc: state.smc,
         intraday: state.intraday,
-        toolStyle: state.toolStyle,
-      }));
+        toolStyle: state.toolStyle, version: 2, params: state.params, colors: state.colors, smcOptions: state.smcOptions, vwapAnchor: state.vwapAnchor,
+      });
     } catch (e) {}
   }
   function loadSettings() {
     try {
       const s = JSON.parse(localStorage.getItem('chartpro-settings'));
       if (!s) return;
-      if (s.symbol) state.symbol = s.symbol;
-      if (s.interval) state.interval = s.interval;
-      if (s.chartType) state.chartType = s.chartType;
-      if (s.indicators) state.indicators = s.indicators;
-      if (s.smc) state.smc = s.smc;
+      if (symbolValid(s.symbol)) state.symbol = s.symbol;
+      if (Object.hasOwn(INTERVALS, s.interval)) state.interval = s.interval;
+      if (['candles','bars','line','area'].includes(s.chartType)) state.chartType = s.chartType;
+      if (s.indicators && typeof s.indicators === 'object') state.indicators = Object.fromEntries(Object.entries(s.indicators).filter(([k,v]) => (Object.hasOwn(overlayDefs,k) || Object.hasOwn(paneDefs,k)) && typeof v === 'boolean'));
+      if (s.smc && typeof s.smc === 'object') state.smc = Object.fromEntries(Object.entries(s.smc).filter(([k,v]) => ['structure','ob','fvg','liquidity','swings','pd'].includes(k) && typeof v === 'boolean'));
       if (s.intraday) {
         const it = { ...s.intraday };
         // migrate old combined "levels" toggle to the split PD / PW toggles
@@ -2123,7 +2084,11 @@
         delete it.levels;
         state.intraday = { countdown: true, ...it };
       }
-      if (s.toolStyle) state.toolStyle = { ...state.toolStyle, ...s.toolStyle };
+      if (s.toolStyle && /^#[a-f\d]{6}$/i.test(s.toolStyle.color) && positive(s.toolStyle.width) && s.toolStyle.width <= 4 && ['solid','dashed','dotted'].includes(s.toolStyle.style)) state.toolStyle = s.toolStyle;
+      if (s.params && typeof s.params === 'object') state.params = validateParams(s.params);
+      if (s.colors && typeof s.colors === 'object') state.colors = Object.fromEntries(Object.entries(s.colors).filter(([k,v]) => Object.hasOwn(overlayDefs,k) || Object.hasOwn(paneDefs,k)).filter(([,v]) => /^#[a-f\d]{6}$/i.test(v)));
+      if (s.smcOptions && Number.isInteger(s.smcOptions.swingLen) && s.smcOptions.swingLen >= 2 && s.smcOptions.swingLen <= 50 && Number.isFinite(s.smcOptions.fvgMinPct) && s.smcOptions.fvgMinPct >= 0 && s.smcOptions.fvgMinPct <= 10) state.smcOptions = s.smcOptions;
+      if (['session','loaded'].includes(s.vwapAnchor)) state.vwapAnchor = s.vwapAnchor;
       // reflect in UI
       document.getElementById('symbol-label').textContent = state.symbol;
       document.querySelectorAll('.tf-btn').forEach(b =>
@@ -2144,8 +2109,9 @@
 
   // ---------- Symbol switching ----------
   function switchSymbol(sym) {
-    if (sym === state.symbol) return;
-    state.symbol = sym;
+    if (!symbolValid(sym) || sym === state.symbol) return;
+    state.symbol = sym; state.market = assetInfo(sym);
+    const url = new URL(location.href); url.searchParams.set('symbol', sym); url.searchParams.set('tf', state.interval); history.replaceState(null, '', url);
     state.selectedIdx = -1;
     lastTickPrice = null;
     loadDrawings();
@@ -2174,10 +2140,7 @@
     if (!allSymbols) {
       resultsEl.innerHTML = '<div class="sr-empty">Loading symbols…</div>';
       try {
-        const d = await apiFetch('/api/v3/exchangeInfo?permissions=SPOT');
-        allSymbols = d.symbols
-          .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
-          .map(s => ({ symbol: s.symbol, base: s.baseAsset }));
+        allSymbols = (await getMarkets()).map(s => ({ symbol: s.symbol, base: s.baseAsset, quote: s.quoteAsset }));
       } catch (e) {
         allSymbols = WATCHLIST.map(([s]) => ({ symbol: s, base: s.replace('USDT', '') }));
       }
@@ -2193,14 +2156,14 @@
       .filter(s => !q || s.symbol.includes(q) || s.base.includes(q))
       .slice(0, 50);
     if (!list.length) {
-      resultsEl.innerHTML = '<div class="sr-empty">No USDT pairs found.</div>';
+      resultsEl.innerHTML = '<div class="sr-empty">No spot pairs found.</div>';
       return;
     }
     resultsEl.innerHTML = '';
     for (const s of list) {
-      const row = document.createElement('div');
-      row.className = 'sr-row';
-      row.innerHTML = `<span class="sr-sym">${s.base}<span class="sr-name"> / USDT</span></span><span class="sr-name">${s.symbol}</span>`;
+      const row = document.createElement('button');
+      row.type = 'button'; row.className = 'sr-row';
+      row.innerHTML = `<span class="sr-sym">${escapeHtml(s.base)}<span class="sr-name"> / ${escapeHtml(s.quote || 'USDT')}</span></span><span class="sr-name">${escapeHtml(s.symbol)}</span>`;
       row.addEventListener('click', () => { closeModal(); switchSymbol(s.symbol); });
       resultsEl.appendChild(row);
     }
@@ -2217,6 +2180,7 @@
       document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.interval = btn.dataset.tf;
+      const url = new URL(location.href); url.searchParams.set('tf', state.interval); history.replaceState(null, '', url);
       loadCandles();
       saveSettings();
     }));
@@ -2235,6 +2199,8 @@
   const smcMenu = document.getElementById('smc-menu');
   function wireDropdown(btnId, menu) {
     const btn = document.getElementById(btnId);
+    btn.setAttribute('aria-expanded', 'false'); btn.setAttribute('aria-controls', menu.id);
+    new MutationObserver(() => btn.setAttribute('aria-expanded', String(menu.classList.contains('open')))).observe(menu, { attributes: true, attributeFilter: ['class'] });
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const wasOpen = menu.classList.contains('open');
@@ -2303,31 +2269,38 @@
     el.innerHTML = `<i class="fa-solid fa-circle"></i> ${text}`;
   }
 
-  function fmtPrice(v) {
-    if (v == null || isNaN(v)) return '—';
-    if (v >= 1000) return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (v >= 1) return v.toFixed(2);
-    if (v >= 0.01) return v.toFixed(4);
-    return v.toPrecision(4);
-  }
-  function fmtCompact(v) {
-    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-    if (v >= 1e3) return (v / 1e3).toFixed(2) + 'K';
-    return v.toFixed(2);
-  }
+  function fmtPrice(v) { return priceFormat(v); }
+  function fmtCompact(v) { return compact(v); }
 
   // ---------- Resize handling ----------
   function resizeMain() {
     const r = mainEl.getBoundingClientRect();
     chart.resize(r.width, r.height);
-    resizeOverlay();
+    resizeOverlay(); positionPaneLabels();
   }
   window.addEventListener('resize', () => { resizeMain(); adjustPaneHeights(); });
   new ResizeObserver(() => resizeMain()).observe(mainEl);
 
   document.getElementById('tz-label').textContent =
-    Intl.DateTimeFormat().resolvedOptions().timeZone + ' (UTC' + (-new Date().getTimezoneOffset() / 60 >= 0 ? '+' : '') + (-new Date().getTimezoneOffset() / 60) + ')';
+    'Chart & tape: UTC · Sessions: local market time';
+
+
+  function validateParams(params) {
+    const out = {};
+    for (const [key, values] of Object.entries(params)) {
+      if (!Object.hasOwn(overlayDefs, key) && !Object.hasOwn(paneDefs, key)) continue;
+      if (!Array.isArray(values) || !values.length || values.length > 4 || !values.every(v => positive(v) && v <= 500)) continue;
+      if (key === 'macd' && values[0] >= values[1]) continue;
+      if (key === 'psar') { if (values.length === 2 && values[0] <= values[1] && values[1] <= 1) out[key] = values; continue; }
+      if (values.every((v, i) => (['bb','keltner','supertrend'].includes(key) && i === 1) || Number.isInteger(v))) out[key] = values;
+    }
+    return out;
+  }
+  document.getElementById('retry-data').onclick = () => { loadCandles(); load24hStats(); loadKeyLevels(); };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.loaded && Date.now() - lastMarketEvent > 30000) connectWs(); });
+  window.addEventListener('pagehide', () => { selection.cancel(); statsTask.cancel(); levelsTask.cancel(); state.ws?.close(); state.wlWs?.close(); disconnectBook(); disconnectTape(); });
+  window.addEventListener('pageshow', e => { if (e.persisted) { loadCandles(); connectWatchlistWs(); } });
+  window.addEventListener('pointercancel', () => { dragging = null; if (brushing) saveDrawings(); brushing = false; updateOverlayPointer(); });
 
   // ---------- Init ----------
   loadSettings();
