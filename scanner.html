@@ -40,8 +40,8 @@
     <button class="tf-btn preset" data-preset="losers">Top Losers</button>
     <button class="tf-btn preset" data-preset="volume">Most Volume</button>
     <button class="tf-btn preset" data-preset="volatile">Most Volatile</button>
-    <button class="tf-btn preset" data-preset="oversold">RSI Oversold</button>
-    <button class="tf-btn preset" data-preset="overbought">RSI Overbought</button>
+    <button class="tf-btn preset" data-preset="oversold">Oversold</button>
+    <button class="tf-btn preset" data-preset="overbought">Overbought</button>
     <button class="tf-btn preset" data-preset="volspike">Volume Spike</button>
   </div>
 
@@ -49,11 +49,14 @@
 
   <div class="scan-search">
     <i class="fa-solid fa-magnifying-glass"></i>
-    <input id="scan-search-input" type="text" placeholder="Filter symbol…" autocomplete="off">
+    <input id="scan-search-input" aria-label="Filter markets" maxlength="24" type="text" placeholder="Filter symbol…" autocomplete="off">
   </div>
 </header>
 
-<div id="scanner-body">
+<main id="scanner-body">
+  <section class="page-heading"><div><span class="eyebrow">DISCOVER OPPORTUNITIES</span><h1>Market scanner<span class="beta-tag">SPOT</span></h1><p>Find the markets that matter. Fresh signals, transparent coverage.</p></div><div class="heading-actions"><button id="scan-pause" class="secondary-btn">Pause</button><button id="scan-refresh" class="secondary-btn"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button><button id="scan-export" class="primary-btn"><i class="fa-solid fa-download"></i> Export CSV</button></div></section>
+  <div id="scanner-error" class="error-banner" role="alert" hidden></div>
+  <div class="filter-bar"><label class="compact-field">Minimum quote volume<input id="scan-min-volume" type="number" min="0" step="1000" value="0"></label><button id="scan-columns" class="secondary-btn">Columns</button><button id="scan-save" class="secondary-btn">Save filters</button><button id="scan-reset" class="text-btn">Reset filters</button><span class="filter-note">RSI uses closed candles. Heuristics are not forecasts.</span></div>
   <div id="scan-summary">
     <div class="sum-card"><label>Pairs</label><span id="sum-pairs">—</span></div>
     <div class="sum-card"><label>Advancers</label><span id="sum-adv" class="up">—</span></div>
@@ -63,7 +66,7 @@
     <div class="sum-note" id="scan-status">Loading…</div>
   </div>
 
-  <div id="scan-table-wrap">
+  <div class="coverage-row"><span id="scan-analysis-status" role="status">Preparing analysis…</span><div class="coverage-track"><div id="coverage-fill"></div></div></div><div id="scan-table-wrap">
     <table id="scan-table">
       <thead>
         <tr>
@@ -84,15 +87,15 @@
         </tr>
       </thead>
       <tbody id="scan-tbody"></tbody>
-    </table>
-  </div>
-</div>
+    </table><div id="scanner-empty" class="empty-state" role="status">Loading markets…</div>
+  </div><div class="pagination"><span id="scan-page"></span><div><button id="scan-prev" class="secondary-btn">Previous</button><button id="scan-next" class="secondary-btn">Next</button></div></div>
+</main>
 
 <footer id="status-bar">
-  <span id="conn-status" class="live"><i class="fa-solid fa-circle"></i> <span id="conn-text">Auto-refresh 10s</span></span>
-  <span class="status-note">Data: Binance · Click a row to open the chart</span>
+  <span id="conn-status" class="live"><i class="fa-solid fa-circle"></i> <span id="conn-text">Tickers refresh every 10s</span></span>
+  <span class="status-note">Data: Binance · Select a market to open the chart</span>
 </footer>
 
-<script src="js/scanner.js"></script>
+<script type="module" src="js/scanner.js"></script>
 </body>
 </html>
