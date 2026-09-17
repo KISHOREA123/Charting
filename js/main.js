@@ -1,3 +1,4 @@
+import { initWorkspace, validParameters } from './workspace.js';
 import * as LWC from 'lightweight-charts';
 import { Indicators } from './indicators.js';
 import { SMC } from './smc.js';
@@ -688,7 +689,7 @@ import { initUI, toast, showDialog } from './ui.js';
   let paintFrame;
   function schedulePaint() { if (!paintFrame) paintFrame = requestAnimationFrame(() => { paintFrame = null; redrawOverlay(); }); }
   function redrawOverlay() {
-    if (overlay.clientHeight !== chart.panes()[0].getHeight()) { resizeOverlay(); return; }
+    if (Math.abs(overlay.clientHeight - chart.panes()[0].getHeight()) > 1) { resizeOverlay(); return; }
     positionPaneLabels();
     octx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
     drawSessions();
@@ -1161,7 +1162,6 @@ import { initUI, toast, showDialog } from './ui.js';
   }
 
   function updateOverlayPointer() {
-    const active = state.drawTool !== 'cursor' || state.drawings.length > 0;
     overlay.classList.toggle('drawing', state.drawTool !== 'cursor');
     overlay.style.pointerEvents = state.drawTool !== 'cursor' ? 'auto' : 'none';
   }
@@ -2285,17 +2285,16 @@ import { initUI, toast, showDialog } from './ui.js';
     'Chart & tape: UTC · Sessions: local market time';
 
 
-  function validateParams(params) {
-    const out = {};
-    for (const [key, values] of Object.entries(params)) {
-      if (!Object.hasOwn(overlayDefs, key) && !Object.hasOwn(paneDefs, key)) continue;
-      if (!Array.isArray(values) || !values.length || values.length > 4 || !values.every(v => positive(v) && v <= 500)) continue;
-      if (key === 'macd' && values[0] >= values[1]) continue;
-      if (key === 'psar') { if (values.length === 2 && values[0] <= values[1] && values[1] <= 1) out[key] = values; continue; }
-      if (values.every((v, i) => (['bb','keltner','supertrend'].includes(key) && i === 1) || Number.isInteger(v))) out[key] = values;
-    }
-    return out;
-  }
+  function validateParams(params) { return Object.fromEntries(Object.entries(params).filter(([key,values]) => validParameters(key,values))); }
+  initWorkspace({ state, chart, overlay, history: drawingHistory, save: saveSettings, refresh: refreshIndicators, smc: updateSmc, paint: redrawOverlay, selectTool, saveDrawings, alerts: () => alerts, watchlist: WATCHLIST,
+    toggleWatch() {
+      const i = WATCHLIST.findIndex(([s]) => s === state.symbol);
+      if (i >= 0) WATCHLIST.splice(i,1);
+      else if (WATCHLIST.length < 40) WATCHLIST.push([state.symbol,state.market.baseAsset]);
+      else { toast('Watchlist limit is 40 markets. Remove one first.'); return; }
+      writeStorage('chartpro-watchlist',WATCHLIST); buildWatchlist(); connectWatchlistWs(); toast(i >= 0 ? 'Removed from watchlist.' : 'Added to watchlist.');
+    },
+  });
   document.getElementById('retry-data').onclick = () => { loadCandles(); load24hStats(); loadKeyLevels(); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.loaded && Date.now() - lastMarketEvent > 30000) connectWs(); });
   window.addEventListener('pagehide', () => { selection.cancel(); statsTask.cancel(); levelsTask.cancel(); state.ws?.close(); state.wlWs?.close(); disconnectBook(); disconnectTape(); });
