@@ -1,149 +1,52 @@
-/* ============ ChartPro Trade Journal ============
-   CRUD over the RESTful Table API (table: trades). */
-
-(() => {
-  'use strict';
-
-  let trades = [];
-
-  async function load() {
-    try {
-      const res = await fetch('tables/trades?limit=500&sort=-opened_at');
-      const d = await res.json();
-      trades = d.data || [];
-    } catch (e) { trades = []; }
-    render();
-  }
-
-  function computePnl(t) {
-    if (!t.exit || !t.entry || !t.quantity) return null;
-    const diff = t.side === 'SHORT' ? t.entry - t.exit : t.exit - t.entry;
-    return diff * t.quantity;
-  }
-
-  function statusOf(t) {
-    if (!t.exit) return 'OPEN';
-    const pnl = computePnl(t);
-    if (pnl > 0) return 'WIN';
-    if (pnl < 0) return 'LOSS';
-    return 'BREAKEVEN';
-  }
-
-  function render() {
-    const tbody = document.getElementById('jr-tbody');
-    const closed = trades.filter(t => t.status && t.status !== 'OPEN');
-    const wins = closed.filter(t => t.status === 'WIN');
-    const losses = closed.filter(t => t.status === 'LOSS');
-    const totalPnl = closed.reduce((s, t) => s + (+t.pnl || 0), 0);
-
-    document.getElementById('js-total').textContent = trades.length;
-    document.getElementById('js-winrate').textContent =
-      closed.length ? (wins.length / closed.length * 100).toFixed(0) + '%' : '—';
-    const pnlEl = document.getElementById('js-pnl');
-    pnlEl.textContent = closed.length ? (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2) : '—';
-    pnlEl.className = totalPnl >= 0 ? 'up' : 'down';
-    document.getElementById('js-avgwin').textContent =
-      wins.length ? '+' + (wins.reduce((s, t) => s + (+t.pnl || 0), 0) / wins.length).toFixed(2) : '—';
-    document.getElementById('js-avgloss').textContent =
-      losses.length ? (losses.reduce((s, t) => s + (+t.pnl || 0), 0) / losses.length).toFixed(2) : '—';
-    document.getElementById('js-open').textContent = trades.filter(t => t.status === 'OPEN').length;
-
-    document.getElementById('jr-empty').classList.toggle('hidden', trades.length > 0);
-    tbody.innerHTML = '';
-    for (const t of trades) {
-      const tr = document.createElement('tr');
-      const pnl = +t.pnl || 0;
-      const date = t.opened_at ? new Date(t.opened_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
-      tr.innerHTML = `
-        <td>${date}</td>
-        <td><b>${esc(t.symbol || '')}</b></td>
-        <td><span class="side-badge side-${(t.side || 'LONG').toLowerCase()}">${t.side || 'LONG'}</span></td>
-        <td class="num">${fmt(t.entry)}</td>
-        <td class="num">${t.exit ? fmt(t.exit) : '—'}</td>
-        <td class="num">${t.quantity ?? '—'}</td>
-        <td class="num ${pnl >= 0 ? 'up' : 'down'}">${t.status === 'OPEN' ? '—' : (pnl >= 0 ? '+' : '') + pnl.toFixed(2)}</td>
-        <td><span class="st-badge st-${(t.status || 'OPEN').toLowerCase()}">${t.status || 'OPEN'}</span></td>
-        <td class="notes hide-sm">${esc(t.notes || '')}</td>
-        <td>
-          ${t.status === 'OPEN' ? '<button class="jr-closebtn" title="Close trade"><i class="fa-solid fa-flag-checkered"></i></button>' : ''}
-          <button class="jr-del" title="Delete"><i class="fa-solid fa-trash"></i></button>
-        </td>`;
-      tr.querySelector('.jr-del').addEventListener('click', async () => {
-        if (!confirm(`Delete ${t.symbol} trade?`)) return;
-        await fetch(`tables/trades/${t.id}`, { method: 'DELETE' });
-        load();
-      });
-      const closeBtn = tr.querySelector('.jr-closebtn');
-      if (closeBtn) closeBtn.addEventListener('click', () => closeTrade(t));
-      tbody.appendChild(tr);
-    }
-  }
-
-  async function closeTrade(t) {
-    const exitStr = prompt(`Exit price for ${t.symbol} ${t.side} (entry ${t.entry}):`);
-    if (!exitStr) return;
-    const exit = +exitStr;
-    if (!(exit > 0)) return alert('Invalid price');
-    const upd = { ...t, exit };
-    upd.pnl = computePnl(upd);
-    upd.status = statusOf(upd);
-    upd.closed_at = new Date().toISOString();
-    await fetch(`tables/trades/${t.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(upd),
-    });
-    load();
-  }
-
-  // ---- Modal ----
-  const modal = document.getElementById('trade-modal');
-  document.getElementById('new-trade-btn').addEventListener('click', () => {
-    modal.classList.remove('hidden');
-    const q = new URLSearchParams(location.search);
-    if (q.get('symbol')) document.getElementById('tr-symbol').value = q.get('symbol');
-    document.getElementById('tr-symbol').focus();
-  });
-  document.getElementById('trade-close').addEventListener('click', () => modal.classList.add('hidden'));
-  modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
-
-  document.getElementById('trade-save').addEventListener('click', async () => {
-    const t = {
-      symbol: document.getElementById('tr-symbol').value.trim().toUpperCase(),
-      side: document.getElementById('tr-side').value,
-      entry: +document.getElementById('tr-entry').value || 0,
-      exit: +document.getElementById('tr-exit').value || 0,
-      quantity: +document.getElementById('tr-qty').value || 0,
-      stop: +document.getElementById('tr-stop').value || 0,
-      target: +document.getElementById('tr-target').value || 0,
-      notes: document.getElementById('tr-notes').value,
-      opened_at: new Date().toISOString(),
-      closed_at: null,
-    };
-    if (!t.symbol || !t.entry) return alert('Symbol and entry price are required.');
-    t.pnl = computePnl(t) || 0;
-    t.status = statusOf(t);
-    if (t.status !== 'OPEN') t.closed_at = new Date().toISOString();
-    await fetch('tables/trades', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(t),
-    });
-    modal.classList.add('hidden');
-    ['tr-symbol', 'tr-entry', 'tr-exit', 'tr-qty', 'tr-stop', 'tr-target', 'tr-notes'].forEach(id =>
-      document.getElementById(id).value = '');
-    load();
-  });
-
-  function fmt(v) {
-    if (v == null || isNaN(v) || v === 0) return '—';
-    if (v >= 1000) return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (v >= 1) return v.toFixed(2);
-    return v.toPrecision(4);
-  }
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  }
-
-  load();
-})();
+import { validateTrade, tradeResult, journalStats, importTrades } from './trades.js';
+import { listTrades, saveTrade, deleteTrade, mergeTrades } from './journal-store.js';
+import { escapeHtml as esc, priceFormat, assetInfo, symbolValid, download, csv } from './core.js';
+import { initUI, toast, showDialog } from './ui.js';
+initUI('journal');
+const $=id=>document.getElementById(id);
+let trades=[],page=1,ready=false;
+const channel='BroadcastChannel' in window?new BroadcastChannel('chartpro-journal'):null;
+if(channel)channel.onmessage=()=>load();
+function money(v){return priceFormat(v);}
+async function load(){try{trades=await listTrades();ready=true;$('jr-error').hidden=true;$('jr-storage-status').textContent='Local database ready · changes saved on this device';const currency=$('jr-currency').value;const quotes=[...new Set(['USDT',...trades.map(t=>t.quoteAsset)])].sort();$('jr-currency').innerHTML=quotes.map(q=>`<option ${q===currency?'selected':''}>${esc(q)}</option>`).join('');render();}catch(e){ready=false;$('jr-error').textContent=e.message;$('jr-error').hidden=false;$('jr-storage-status').textContent='Storage unavailable · no changes saved';}}
+async function changed(){channel?.postMessage('changed');await load();}
+function filtered(){const search=$('jr-search').value.trim().toUpperCase(),status=$('jr-status').value,from=$('jr-from').value,to=$('jr-to').value;return trades.filter(t=>t.quoteAsset===$('jr-currency').value&&`${t.symbol} ${t.setup} ${t.notes}`.toUpperCase().includes(search)&&(!from||t.opened_at.slice(0,10)>=from)&&(!to||t.opened_at.slice(0,10)<=to)).filter(t=>{const r=tradeResult(t);return status==='all'||status==='open'&&!r.closed||status==='closed'&&r.closed||status===r.status;}).sort((a,b)=>Date.parse(b.opened_at)-Date.parse(a.opened_at));}
+function render(){const list=filtered(),stats=journalStats(list),pages=Math.max(1,Math.ceil(list.length/50));page=Math.min(page,pages);
+  $('js-total').textContent=stats.total;$('js-open').textContent=stats.open;$('js-winrate').textContent=stats.winrate==null?'—':stats.winrate.toFixed(1)+'%';$('js-pnl').textContent=(stats.net>0?'+':'')+money(stats.net);$('js-pnl').className=stats.net>=0?'up':'down';$('pnl-currency').textContent=$('jr-currency').value+' · after costs';$('js-factor').textContent=stats.profitFactor==null?'—':stats.profitFactor===Infinity?'∞':stats.profitFactor.toFixed(2);$('js-drawdown').textContent=money(stats.drawdown);$('js-expectancy').textContent=stats.expectancy==null?'—':money(stats.expectancy);
+  $('jr-tbody').innerHTML=list.slice((page-1)*50,page*50).map(t=>{const r=tradeResult(t);return `<tr><td>${new Date(t.opened_at).toLocaleDateString()}</td><td><a class="market-link" href="index.html?symbol=${t.symbol}">${esc(t.symbol)}</a></td><td><span class="side-badge side-${t.side.toLowerCase()}">${t.side}</span></td><td class="num">${money(t.entry)}</td><td class="num">${money(t.quantity)}<small class="table-sub">${money(r.remaining)} remaining</small></td><td class="num ${r.net>=0?'up':'down'}">${t.exits.length?(r.net>0?'+':'')+money(r.net):'—'}</td><td class="num">${r.r==null||!t.exits.length?'—':r.r.toFixed(2)+'R'}</td><td><span class="st-badge st-${r.status.toLowerCase()}">${r.status}</span></td><td>${esc(t.setup||'—')}</td><td class="row-actions"><button data-edit="${t.id}" class="text-btn" aria-label="Edit ${t.symbol} trade">Edit</button>${r.remaining>0?`<button data-close="${t.id}" class="text-btn">Close</button>`:''}<button data-view="${t.id}" class="text-btn">Details</button><button data-delete="${t.id}" class="text-btn danger" aria-label="Delete ${t.symbol} trade"><i class="fa-solid fa-trash"></i></button></td></tr>`;}).join('');
+  $('jr-empty').hidden=list.length>0;$('jr-page').textContent=`Page ${page} of ${pages} · ${list.length} trades`;$('jr-prev').disabled=page<=1;$('jr-next').disabled=page>=pages;
+  renderEquity(stats.equity);
+  const setups=new Map();list.forEach(t=>{const key=t.setup||'Untagged',r=tradeResult(t),v=setups.get(key)||{count:0,net:0};v.count++;v.net+=r.net;setups.set(key,v);});
+  $('setup-stats').innerHTML=[...setups].sort((a,b)=>b[1].net-a[1].net).slice(0,6).map(([tag,s])=>`<div class="setup-item"><span><b>${esc(tag)}</b><small>${s.count} trades</small></span><strong class="${s.net>=0?'up':'down'}">${money(s.net)}</strong></div>`).join('')||'<p class="muted">Add setup tags to discover what works for you.</p>';
+}
+function renderEquity(points){const el=$('equity-chart');if(!points.length){el.innerHTML='<div class="equity-empty">Your realized performance curve will appear after an exit.</div>';$('equity-caption').textContent='No exits in this filter';return;}
+  const values=[0,...points.map(p=>p.value)],lo=Math.min(...values),hi=Math.max(...values),range=hi-lo||1,w=800,h=160;
+  const coords=values.map((v,i)=>[55+i*(w-75)/Math.max(1,values.length-1),15+(hi-v)/range*(h-40)]),path=coords.map((p,i)=>(i?'L':'M')+p.map(v=>v.toFixed(2)).join(',')).join(' '),color=values.at(-1)>=0?'#35c9ad':'#f47c85';
+  el.innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Realized PnL ${esc(money(values.at(-1)))} ${esc($('jr-currency').value)}"><defs><linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity=".22"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><line x1="55" y1="${15+hi/range*(h-40)}" x2="780" y2="${15+hi/range*(h-40)}" stroke="#354155" stroke-dasharray="4 4"/><path d="${path} L780,150 L55,150Z" fill="url(#equity-fill)"/><path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/><text x="3" y="20" fill="#a0acc0" font-size="11">${esc(money(hi))}</text><text x="3" y="135" fill="#a0acc0" font-size="11">${esc(money(lo))}</text></svg>`;
+  $('equity-caption').textContent=points.length+' exit executions · '+$('jr-currency').value;
+}
+function datetime(value){const d=new Date(value||Date.now());return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+function field(label,name,type,value='',extra=''){return `<label class="field">${label}<input name="${name}" type="${type}" value="${esc(value??'')}" ${extra}></label>`;}
+function editTrade(trade){
+  if(!ready)return toast('Local database unavailable. Retry before saving.','error');
+  const q=new URLSearchParams(location.search),sym=trade?.symbol||(symbolValid(q.get('symbol'))?q.get('symbol'):'');
+  const t=trade||{symbol:sym,side:'LONG',entry:Number(q.get('entry'))>0?q.get('entry'):'',quantity:'',quoteAsset:assetInfo(sym).quoteAsset==='QUOTE'?'USDT':assetInfo(sym).quoteAsset,notes:'',setup:'',fees:0,funding:0,exits:[]};
+  showDialog(trade?'Edit trade':'Log a trade',`<div class="trade-form-grid">${field('Market symbol','symbol','text',t.symbol,'required maxlength="24"')}${field('Quote currency','quoteAsset','text',t.quoteAsset,'required maxlength="12"')}<label class="field">Side<select name="side"><option ${t.side==='LONG'?'selected':''}>LONG</option><option ${t.side==='SHORT'?'selected':''}>SHORT</option></select></label>${field('Opened (local time)','opened_at','datetime-local',datetime(t.opened_at),'required')}${field('Entry price','entry','number',t.entry,'required min="0.000000000001" step="any"')}${field('Position quantity','quantity','number',t.quantity,'required min="0.000000000001" step="any"')}${field('Stop-loss (optional)','stop','number',t.stop,'min="0.000000000001" step="any"')}${field('Target (optional)','target','number',t.target,'min="0.000000000001" step="any"')}${field('Entry fees (quote)','fees','number',t.fees,'required min="0" step="any"')}${field('Funding cost (negative = credit)','funding','number',t.funding,'required step="any"')}${field('Setup tag','setup','text',t.setup,'maxlength="80"')}${!trade?field('Exit price (blank = open)','initialExit','number','','min="0.000000000001" step="any"'):''}</div><label class="field">Notes<textarea name="notes" rows="3" maxlength="10000" placeholder="Setup, execution, lesson…">${esc(t.notes)}</textarea></label><label class="field">Chart screenshot (optional, ≤2 MB)<input name="attachment" type="file" accept="image/png,image/jpeg,image/webp"></label>${t.attachment?'<label class="check-field"><input name="removeAttachment" type="checkbox"> Remove existing screenshot</label>':''}<p class="help-note">All costs are in quote currency. Local-only data; back up regularly.${trade?.exits.length?' Existing exits are preserved.':''}</p>`,async form=>{
+    const data=Object.fromEntries(form);let attachment=t.attachment||'';const file=form.get('attachment');
+    if(form.has('removeAttachment'))attachment='';
+    if(file instanceof File&&file.size){if(file.size>2e6||!['image/png','image/jpeg','image/webp'].includes(file.type))throw new Error('Use a PNG, JPEG or WebP image under 2 MB.');attachment=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});}
+    const record=validateTrade({...t,...data,id:t.id,revision:t.revision,attachment,opened_at:new Date(String(data.opened_at)).toISOString(),exits:!trade&&data.initialExit?[{price:Number(data.initialExit),quantity:Number(data.quantity),fees:0,at:new Date().toISOString()}]:t.exits});
+    await saveTrade(record,trade?trade.revision:null);await changed();toast('Trade saved on this device.','success');
+  },{submit:trade?'Save changes':'Save trade'});
+}
+function closeTrade(t){const r=tradeResult(t);showDialog('Record an exit',`<p class="muted">${esc(t.symbol)} · ${t.side} · ${money(r.remaining)} remaining. Use a smaller quantity for a partial close.</p>${field('Exit price','price','number','','required min="0.000000000001" step="any"')}${field('Exit quantity','quantity','number',r.remaining,`required min="0.000000000001" max="${r.remaining}" step="any"`)}${field('Exit fees (quote)','fees','number',0,'required min="0" step="any"')}${field('Exited (local time)','at','datetime-local',datetime(),'required')}`,async form=>{const e=Object.fromEntries(form);await saveTrade({...t,exits:[...t.exits,{price:Number(e.price),quantity:Number(e.quantity),fees:Number(e.fees),at:new Date(e.at).toISOString()}]},t.revision);await changed();toast('Exit recorded.','success');},{submit:'Record exit'});}
+function details(t){const r=tradeResult(t);showDialog(`${t.symbol} trade details`,`<div class="trade-detail"><p>${t.side} · ${r.status} · ${esc(t.quoteAsset)}</p><p>Realized net: <b>${money(r.net)}</b> · Remaining: ${money(r.remaining)}</p><p>Entry fees: ${money(t.fees)} · Funding: ${money(t.funding)}</p><p>Stop: ${t.stop==null?'—':money(t.stop)} · Target: ${t.target==null?'—':money(t.target)}</p><h3>Exit executions</h3>${t.exits.length?`<ul>${t.exits.map(e=>`<li>${esc(new Date(e.at).toLocaleString())}: ${money(e.quantity)} @ ${money(e.price)} · fees ${money(e.fees)}</li>`).join('')}</ul>`:'<p>No exits yet.</p>'}<h3>Notes</h3><p class="preserve-lines">${esc(t.notes||'No notes.')}</p>${t.attachment?`<img class="trade-attachment" src="${esc(t.attachment)}" alt="Chart screenshot attached to this trade">`:''}</div>`,null,{submit:'Done'});}
+$('jr-tbody').onclick=e=>{const b=e.target.closest('button');if(!b)return;const key=['edit','close','view','delete'].find(k=>b.dataset[k]);const t=trades.find(t=>t.id===b.dataset[key]);if(!t)return;if(key==='edit')editTrade(t);if(key==='close')closeTrade(t);if(key==='view')details(t);if(key==='delete')showDialog('Delete trade?',`<p>Delete ${esc(t.symbol)} and all its exits? This cannot be undone. Export a backup if needed.</p>`,async()=>{await deleteTrade(t.id,t.revision);await changed();toast('Trade deleted.');},{submit:'Delete trade',destructive:true});};
+$('new-trade-btn').onclick=()=>editTrade();$('empty-log').onclick=()=>editTrade();$('jr-retry').onclick=load;
+['jr-currency','jr-search','jr-status','jr-from','jr-to'].forEach(id=>$(id).addEventListener('input',()=>{page=1;render();}));
+$('jr-prev').onclick=()=>{page--;render();};$('jr-next').onclick=()=>{page++;render();};
+$('jr-export').onclick=()=>download('chartpro_journal_'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify({app:'chartpro-journal',version:2,exported_at:new Date().toISOString(),trades},null,2));
+$('jr-csv').onclick=()=>download('chartpro_journal.csv',csv([['id','symbol','quote','side','opened_at','entry','quantity','remaining','realized_net','status','R','setup','notes'],...filtered().map(t=>{const r=tradeResult(t);return[t.id,t.symbol,t.quoteAsset,t.side,t.opened_at,t.entry,t.quantity,r.remaining,r.net,r.status,r.r,t.setup,t.notes];})]),'text/csv');
+$('jr-import').onclick=()=>{const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.onchange=async()=>{try{const file=input.files[0];if(!file||file.size>25e6)throw new Error('Choose a JSON backup under 25 MB.');const records=importTrades(JSON.parse(await file.text()));showDialog('Import journal backup?',`<p>Validate and merge ${records.length} trades. Existing IDs will be skipped, not overwritten. Import is atomic.</p>`,async()=>{const count=await mergeTrades(records);await changed();toast(`${count} trades imported; ${records.length-count} existing IDs skipped.`,'success');},{submit:'Import trades'});}catch(error){toast(error.message,'error');}};input.click();};
+$('jr-legacy').onclick=()=>showDialog('Import legacy Table API', '<p>This performs read-only requests to this site’s old /tables/trades endpoint and merges valid records locally. It does not delete server records. This works only on a host that provides that API.</p>',async()=>{let records=[],offset=0;for(let i=0;i<20;i++){const response=await fetch(`tables/trades?limit=500&page=${i+1}&offset=${offset}`,{signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error(`Legacy API unavailable (${response.status}). Export its JSON records and use Import instead.`);const data=await response.json();if(!Array.isArray(data.data))throw new Error('Unexpected legacy API response.');if(data.data.length&&records.some(r=>r.id===data.data[0].id))throw new Error('Legacy API pagination did not advance. Export JSON from that host instead.');records.push(...data.data);if(data.data.length<500||data.total&&records.length>=data.total)break;offset+=500;if(i===19)throw new Error('Legacy import exceeds 10,000 records. Use file import in smaller batches.');}const valid=importTrades(records),count=await mergeTrades(valid);await changed();toast(`${count} legacy trades imported.`,'success');},{submit:'Import legacy records'});
+load();

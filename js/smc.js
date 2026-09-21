@@ -3,7 +3,7 @@
    Detects: swing points, market structure (BOS/CHoCH), order blocks,
    fair value gaps, equal highs/lows (liquidity), premium/discount range. */
 
-const SMC = (() => {
+export const SMC = (() => {
 
   /* ---- Swing highs/lows (fractal pivots with `len` bars each side) ---- */
   function swings(candles, len = 5) {
@@ -24,7 +24,7 @@ const SMC = (() => {
   /* ---- Market structure: BOS (continuation) & CHoCH (reversal) ----
      Walks candles; when close breaks the latest confirmed swing high/low,
      emits an event. Trend flips on CHoCH. */
-  function structure(candles, sw) {
+  function structure(candles, sw, len = 5) {
     const events = []; // { type:'BOS'|'CHoCH', dir:'bull'|'bear', level, fromTime, breakTime }
     const pivots = [
       ...sw.highs.map(h => ({ ...h, kind: 'H' })),
@@ -38,7 +38,7 @@ const SMC = (() => {
     let p = 0;
     for (let i = 0; i < candles.length; i++) {
       // register pivots confirmed by bar i (pivot needs len bars after it)
-      while (p < pivots.length && pivots[p].idx + 5 <= i) {
+      while (p < pivots.length && pivots[p].idx + len <= i) {
         if (pivots[p].kind === 'H') lastHigh = pivots[p];
         else lastLow = pivots[p];
         p++;
@@ -181,7 +181,7 @@ const SMC = (() => {
   function analyze(candles, opts = {}) {
     if (candles.length < 30) return null;
     const sw = swings(candles, opts.swingLen || 5);
-    const events = structure(candles, sw);
+    const events = structure(candles, sw, opts.swingLen || 5);
     return {
       swings: { highs: sw.highs.slice(-20), lows: sw.lows.slice(-20) },
       structure: events.slice(-8),
