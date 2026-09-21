@@ -1,11 +1,13 @@
+import { periodValid } from './core.js';
 /* ============ Technical indicator calculations ============
    All functions take an array of candles:
    { time, open, high, low, close, volume }
    and return arrays of { time, value } (or richer objects). */
 
-const Indicators = (() => {
+export const Indicators = (() => {
 
   function sma(candles, period, source = 'close') {
+    periodValid(period);
     const out = [];
     let sum = 0;
     for (let i = 0; i < candles.length; i++) {
@@ -17,6 +19,7 @@ const Indicators = (() => {
   }
 
   function ema(candles, period, source = 'close') {
+    periodValid(period);
     const out = [];
     const k = 2 / (period + 1);
     let prev;
@@ -37,6 +40,7 @@ const Indicators = (() => {
   }
 
   function bollinger(candles, period = 20, mult = 2) {
+    periodValid(period);
     const upper = [], middle = [], lower = [];
     for (let i = period - 1; i < candles.length; i++) {
       let sum = 0;
@@ -56,11 +60,13 @@ const Indicators = (() => {
     return { upper, middle, lower };
   }
 
-  /* Session-less running VWAP (from start of loaded data) */
-  function vwap(candles) {
+  /* VWAP: UTC session reset by default; anchor="loaded" uses loaded history */
+  function vwap(candles, anchor = 'session') {
     const out = [];
-    let cumPV = 0, cumV = 0;
+    let cumPV = 0, cumV = 0, day = null;
     for (const c of candles) {
+      const nextDay = Math.floor(c.time / 86400);
+      if (anchor === 'session' && day !== nextDay) { cumPV = 0; cumV = 0; day = nextDay; }
       const typical = (c.high + c.low + c.close) / 3;
       cumPV += typical * c.volume;
       cumV += c.volume;
@@ -71,6 +77,7 @@ const Indicators = (() => {
 
   /* Wilder's RSI */
   function rsi(candles, period = 14) {
+    periodValid(period);
     const out = [];
     if (candles.length <= period) return out;
     let avgGain = 0, avgLoss = 0;
@@ -92,11 +99,12 @@ const Indicators = (() => {
     return out;
   }
   function rsiVal(g, l) {
-    if (l === 0) return 100;
+    if (l === 0) return g === 0 ? 50 : 100;
     return 100 - 100 / (1 + g / l);
   }
 
   function macd(candles, fast = 12, slow = 26, signalP = 9) {
+    [fast, slow, signalP].forEach(periodValid); if (fast >= slow) throw new RangeError('MACD fast period must be less than slow period');
     const fastE = ema(candles, fast);
     const slowE = ema(candles, slow);
     // align by time — slowE starts later
@@ -134,6 +142,7 @@ const Indicators = (() => {
   }
 
   function wma(candles, period, source = 'close') {
+    periodValid(period);
     const out = [];
     const denom = period * (period + 1) / 2;
     for (let i = period - 1; i < candles.length; i++) {
@@ -146,6 +155,7 @@ const Indicators = (() => {
 
   /* Stochastic %K / %D */
   function stochastic(candles, kP = 14, kSmooth = 3, dP = 3) {
+    [kP, kSmooth, dP].forEach(periodValid);
     const rawK = [];
     for (let i = kP - 1; i < candles.length; i++) {
       let hh = -Infinity, ll = Infinity;
@@ -173,6 +183,7 @@ const Indicators = (() => {
 
   /* Stochastic RSI */
   function stochRsi(candles, rsiP = 14, stochP = 14, kSmooth = 3, dSmooth = 3) {
+    [rsiP, stochP, kSmooth, dSmooth].forEach(periodValid);
     const r = rsi(candles, rsiP);
     const rawK = [];
     for (let i = stochP - 1; i < r.length; i++) {
@@ -190,7 +201,7 @@ const Indicators = (() => {
 
   /* True range helper */
   function trueRanges(candles) {
-    const tr = [candles.length ? candles[0].high - candles[0].low : 0];
+    const tr = candles.length ? [candles[0].high - candles[0].low] : [];
     for (let i = 1; i < candles.length; i++) {
       const c = candles[i], p = candles[i - 1];
       tr.push(Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)));
@@ -200,6 +211,7 @@ const Indicators = (() => {
 
   /* Wilder-smoothed ATR */
   function atr(candles, period = 14) {
+    periodValid(period);
     const tr = trueRanges(candles);
     const out = [];
     if (candles.length < period) return out;
@@ -216,6 +228,7 @@ const Indicators = (() => {
 
   /* ADX with +DI / -DI */
   function adx(candles, period = 14) {
+    periodValid(period);
     if (candles.length < period * 2) return { adxLine: [], plusDI: [], minusDI: [] };
     const tr = trueRanges(candles);
     const plusDM = [0], minusDM = [0];
@@ -256,6 +269,7 @@ const Indicators = (() => {
 
   /* Commodity Channel Index */
   function cci(candles, period = 20) {
+    periodValid(period);
     const out = [];
     for (let i = period - 1; i < candles.length; i++) {
       let sum = 0;
@@ -277,6 +291,7 @@ const Indicators = (() => {
 
   /* Money Flow Index */
   function mfi(candles, period = 14) {
+    periodValid(period);
     const out = [];
     if (candles.length <= period) return out;
     const tp = candles.map(c => (c.high + c.low + c.close) / 3);
@@ -287,7 +302,7 @@ const Indicators = (() => {
         if (tp[j] > tp[j - 1]) pos += flow;
         else if (tp[j] < tp[j - 1]) neg += flow;
       }
-      out.push({ time: candles[i].time, value: neg === 0 ? 100 : 100 - 100 / (1 + pos / neg) });
+      out.push({ time: candles[i].time, value: neg === 0 ? (pos === 0 ? 50 : 100) : 100 - 100 / (1 + pos / neg) });
     }
     return out;
   }
@@ -308,6 +323,7 @@ const Indicators = (() => {
 
   /* Williams %R */
   function williamsR(candles, period = 14) {
+    periodValid(period);
     const out = [];
     for (let i = period - 1; i < candles.length; i++) {
       let hh = -Infinity, ll = Infinity;
@@ -322,6 +338,7 @@ const Indicators = (() => {
 
   /* Ichimoku Cloud (standard 9/26/52) — spans shifted forward 26 bars */
   function ichimoku(candles, conv = 9, base = 26, spanB = 52, disp = 26) {
+    [conv, base, spanB, disp].forEach(periodValid);
     const mid = (i, p) => {
       let hh = -Infinity, ll = Infinity;
       for (let j = 0; j < p; j++) {
@@ -373,6 +390,7 @@ const Indicators = (() => {
 
   /* SuperTrend */
   function supertrend(candles, period = 10, mult = 3) {
+    periodValid(period);
     const a = atr(candles, period);
     if (!a.length) return [];
     const offset = candles.length - a.length;
@@ -397,6 +415,7 @@ const Indicators = (() => {
 
   /* Donchian Channels */
   function donchian(candles, period = 20) {
+    periodValid(period);
     const upper = [], lower = [], middle = [];
     for (let i = period - 1; i < candles.length; i++) {
       let hh = -Infinity, ll = Infinity;
@@ -414,6 +433,7 @@ const Indicators = (() => {
 
   /* Keltner Channels */
   function keltner(candles, period = 20, mult = 2) {
+    periodValid(period);
     const mid = ema(candles, period);
     const a = atr(candles, period);
     if (!mid.length || !a.length) return { upper: [], middle: [], lower: [] };

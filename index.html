@@ -2,21 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://data-api.binance.vision https://api.binance.com wss://data-stream.binance.vision wss://stream.binance.com:9443 ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ChartPro — Crypto Charting</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body><a class="skip-link" href="#chart-area">Skip to main content</a>
 
-<header id="top-toolbar">
-  <div class="toolbar-group brand">
-    <i class="fa-solid fa-chart-line brand-icon"></i>
-    <span class="brand-name">ChartPro</span>
-  </div>
-
-  <button id="symbol-button" class="symbol-btn" title="Change symbol">
+<header id="top-toolbar"><a class="toolbar-group brand nav-link" href="index.html"><i class="fa-solid fa-chart-line brand-icon"></i><span class="brand-name">ChartPro<span class="brand-pro">PRO</span></span></a><nav class="page-nav" aria-label="Main navigation"><a href="index.html" class="active" aria-current="page"><i class="fa-solid fa-chart-column"></i> Workspace</a><a href="scanner.html"><i class="fa-solid fa-magnifying-glass-chart"></i> Scanner</a><a href="journal.html"><i class="fa-solid fa-book"></i> Journal</a></nav><span class="toolbar-spacer"></span><span class="privacy-badge">Binance Spot</span><button id="sidebar-toggle" class="icon-btn" title="Toggle market panels"><i class="fa-solid fa-table-columns"></i></button></header>
+<div id="chart-toolbar" aria-label="Chart controls">  <button id="symbol-button" class="symbol-btn" title="Change symbol">
     <i class="fa-solid fa-magnifying-glass"></i>
     <span id="symbol-label">BTCUSDT</span>
   </button>
@@ -59,7 +54,7 @@
       <label class="dd-item"><input type="checkbox" data-ind="bb"> Bollinger Bands (20, 2)</label>
       <label class="dd-item"><input type="checkbox" data-ind="keltner"> Keltner Channels (20, 2)</label>
       <label class="dd-item"><input type="checkbox" data-ind="donchian"> Donchian Channels (20)</label>
-      <label class="dd-item"><input type="checkbox" data-ind="vwap"> VWAP</label>
+      <label class="dd-item"><input type="checkbox" data-ind="vwap"> VWAP (UTC session)</label>
       <label class="dd-item"><input type="checkbox" data-ind="ichimoku"> Ichimoku Cloud (9, 26, 52)</label>
       <label class="dd-item"><input type="checkbox" data-ind="psar"> Parabolic SAR</label>
       <label class="dd-item"><input type="checkbox" data-ind="supertrend"> SuperTrend (10, 3)</label>
@@ -101,10 +96,10 @@
     </button>
     <div class="dropdown-menu" id="intraday-menu">
       <div class="dd-title">Intraday Tools</div>
-      <label class="dd-item"><input type="checkbox" data-intra="sessions"> Session Boxes (Asia / London / NY)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="sessions"> Sessions (Tokyo / London / NY, DST-aware)</label>
       <label class="dd-item"><input type="checkbox" data-intra="pdlevels"> PDH / PDL (Previous Day)</label>
       <label class="dd-item"><input type="checkbox" data-intra="pwlevels"> PWH / PWL (Previous Week)</label>
-      <label class="dd-item"><input type="checkbox" data-intra="vprofile"> Volume Profile (POC / VAH / VAL)</label>
+      <label class="dd-item"><input type="checkbox" data-intra="vprofile"> Approx. Volume Profile (loaded history)</label>
       <label class="dd-item"><input type="checkbox" data-intra="cvd"> CVD — Cumulative Volume Delta</label>
       <label class="dd-item"><input type="checkbox" data-intra="countdown" checked> Candle Countdown</label>
       <div class="dd-sep"></div>
@@ -114,16 +109,7 @@
 
   <div class="toolbar-sep"></div>
 
-  <a href="scanner.html" class="icon-btn nav-link" title="Market Scanner">
-    <i class="fa-solid fa-magnifying-glass-chart"></i><span class="btn-text">Scanner</span>
-  </a>
-  <a href="journal.html" class="icon-btn nav-link" title="Trade Journal">
-    <i class="fa-solid fa-book"></i><span class="btn-text">Journal</span>
-  </a>
-
-  <div class="toolbar-spacer"></div>
-
-  <div id="ticker-stats">
+<div class="toolbar-spacer"></div>  <div id="ticker-stats">
     <span id="stat-price" class="stat-price">—</span>
     <span id="stat-change" class="stat-change">—</span>
     <span class="stat-pair"><label>24h High</label><span id="stat-high">—</span></span>
@@ -131,11 +117,9 @@
     <span class="stat-pair"><label>24h Vol</label><span id="stat-vol">—</span></span>
   </div>
 
-  <button id="sidebar-toggle" class="icon-btn" title="Toggle panels (watchlist, book, tape, alerts)">
-    <i class="fa-solid fa-table-columns"></i>
-  </button>
-</header>
+</div>
 
+<div class="workspace-bar"><div><span class="eyebrow">MARKET WORKSPACE</span><span id="market-caption">BTC / USDT · Binance Spot</span></div><div class="workspace-actions"><button id="undo-drawing" class="icon-btn" title="Undo drawing (Ctrl+Z)" disabled><i class="fa-solid fa-rotate-left"></i></button><button id="redo-drawing" class="icon-btn" title="Redo drawing (Ctrl+Shift+Z)" disabled><i class="fa-solid fa-rotate-right"></i></button><button id="retry-data" class="secondary-btn"><i class="fa-solid fa-arrows-rotate"></i> Retry</button><button id="workspace-settings" class="secondary-btn"><i class="fa-solid fa-sliders"></i> Settings</button><button id="export-chart" class="secondary-btn"><i class="fa-solid fa-camera"></i> Snapshot</button><button id="workspace-more" class="secondary-btn">Workspace <i class="fa-solid fa-chevron-down"></i></button></div></div>
 <div id="workspace">
 
   <aside id="left-toolbar">
@@ -179,7 +163,7 @@
       <button id="ds-close" class="ds-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <section id="main-chart-wrap">
-      <div id="legend"></div>
+      <div id="legend"></div><div id="chart-message" class="chart-message" role="status">Loading market history…</div>
       <div id="main-chart"></div>
       <canvas id="draw-overlay"></canvas>
 
@@ -229,10 +213,10 @@
     </div>
     <div id="tape" class="sb-panel hidden">
       <div class="ob-header"><span>Time</span><span>Price</span><span>Size</span></div>
-      <div id="tape-rows"></div>
+      <p id="tape-status" class="feed-caption">Connecting…</p><div id="tape-rows"></div>
     </div>
     <div id="alerts-panel" class="sb-panel hidden">
-      <div class="alerts-info">Use the <i class="fa-solid fa-bell"></i> tool and click a price on the chart to set an alert.</div>
+      <div class="alerts-info">Current-chart alerts only. Keep this page open and this symbol selected. Alerts may be delayed in background tabs; they do not run when the app is closed.</div>
       <div id="alerts-list"></div>
     </div>
   </aside>
@@ -242,7 +226,7 @@
   <span id="conn-status"><i class="fa-solid fa-circle"></i> Connecting…</span>
   <span id="candle-countdown" title="Time until candle close"><i class="fa-regular fa-clock"></i> —</span>
   <span id="tz-label"></span>
-  <span class="status-note">Data: Binance · Charts: TradingView Lightweight Charts™</span>
+  <span class="status-note">Research tools, not trade execution · TradingView Lightweight Charts™ © 2026 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></span>
 </footer>
 
 <!-- Position size calculator modal -->
@@ -254,7 +238,7 @@
       <button id="calc-close" class="icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <div class="calc-body">
-      <label class="calc-row"><span>Account size (USDT)</span><input type="number" id="calc-account" value="10000" min="0"></label>
+      <label class="calc-row"><span id="calc-account-label">Account size (USDT)</span><input type="number" id="calc-account" value="10000" min="0"></label>
       <label class="calc-row"><span>Risk per trade (%)</span><input type="number" id="calc-risk" value="1" min="0.1" step="0.1"></label>
       <label class="calc-row"><span>Entry price</span><input type="number" id="calc-entry" step="any"></label>
       <label class="calc-row"><span>Stop-loss price</span><input type="number" id="calc-stop" step="any"></label>
@@ -265,7 +249,7 @@
         <div class="calc-res"><label>Position value</label><span id="calc-value">—</span></div>
         <div class="calc-res"><label>Margin required</label><span id="calc-margin">—</span></div>
       </div>
-      <div class="calc-note">Fill entry &amp; stop from the last price with the button below.</div>
+      <div class="calc-note"><span id="calc-feedback">Estimate excludes fees, slippage and liquidation.</span></div>
       <button id="calc-use-price" class="calc-btn">Use current price as entry</button>
     </div>
   </div>
@@ -276,17 +260,14 @@
   <div class="modal-box">
     <div class="modal-head">
       <i class="fa-solid fa-magnifying-glass"></i>
-      <input id="symbol-search-input" type="text" placeholder="Search crypto pair, e.g. ETH" autocomplete="off">
+      <input id="symbol-search-input" aria-label="Search spot markets" type="text" placeholder="Search crypto pair, e.g. ETH" autocomplete="off">
       <button id="modal-close" class="icon-btn" title="Close"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <div id="symbol-results"></div>
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/indicators.js"></script>
-<script src="js/smc.js"></script>
-<script src="js/main.js"></script>
+<script type="module" src="js/main.js"></script>
 
 </body>
 </html>
